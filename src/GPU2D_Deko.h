@@ -35,7 +35,15 @@ public:
 
     dk::Fence FramebufferReady[2] = {};
     dk::Fence FramebufferPresented[2] = {};
+
+    // When enabled, the finished top screen of every frame is copied into a
+    // CPU readable buffer (ready together with FramebufferReady[fb]).
+    void SetStreamCapture(bool enable) { StreamCaptureEnabled = enable; }
+    GpuMemHeap::Allocation& GetStreamCapture(u32 fb) { return StreamCaptureMemory[fb]; }
 private:
+    bool StreamCaptureEnabled = false;
+    GpuMemHeap::Allocation StreamCaptureMemory[2];
+
     u16 DispFIFOFramebuffer[256*192];
 
     dk::Image FinalFramebuffers[2][2];

@@ -28,6 +28,7 @@ SET(SOURCES_SWITCH
     mm_vec/mm_vec.c
     stb_truetype/stb_truetype.c
     stb_image/stb_image.c
+    Stream.cpp
 
     ../../../external/rcheevos/src/rc_util.c
     ../../../external/rcheevos/src/rc_client_raintegration.c
@@ -93,7 +94,7 @@ string(REGEX MATCH "PROJECT_VERSION \"([0-9.]+)\"" _ ${VERSION_HEADER})
 set(PROJECT_VERSION ${CMAKE_MATCH_1})
 
 add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/control.nacp
-                   COMMAND ${NACPTOOL} --create "melonDS Switch" "Arisotura, RSDuck, Hydr8gon, Jpe230, Gheovgos" "release ${PROJECT_VERSION}" ${CMAKE_BINARY_DIR}/control.nacp)
+                   COMMAND ${NACPTOOL} --create "melonDS Switch" "Arisotura, RSDuck, Hydr8gon, Jpe230, Gheovgos, Lucas Sarazin" "release ${PROJECT_VERSION}" ${CMAKE_BINARY_DIR}/control.nacp)
 
 make_directory(${CMAKE_BINARY_DIR}/romfs/shaders)
 configure_file(${CMAKE_SOURCE_DIR}/icon/melon_128x128.png ${CMAKE_BINARY_DIR}/romfs/melon_128x128.png COPYONLY)

@@ -272,6 +272,8 @@ public:
     void* JitRWBase;
     void* JitRWStart;
     void* JitRXStart;
+    void* JitBuffer;   // libnx Jit* when JitMemMode == 1
+    int JitMemMode;    // 0: process handle mapping, 1: libnx jitCreate, 2: plain RW memory (JIT unusable)
 #endif
 
     void* ReadBanked, *WriteBanked;

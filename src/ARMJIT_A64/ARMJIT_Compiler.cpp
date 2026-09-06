@@ -221,38 +221,88 @@ void Compiler::PopRegs(bool saveHiRegs, bool saveRegsToBeChanged)
 Compiler::Compiler()
 {
 #ifdef __SWITCH__
-    JitRWBase = aligned_alloc(0x1000, JitMemSize);
+    JitRWBase = NULL;
+    JitRWStart = NULL;
+    JitRXStart = NULL;
+    JitBuffer = NULL;
+    JitMemMode = -1;
 
-    JitRXStart = (u8*)&__start__ - JitMemSize - 0x1000;
-    virtmemLock();
-    JitRWStart = virtmemFindAslr(JitMemSize, 0x1000);
-    MemoryInfo info = {0};
-    u32 pageInfo = {0};
-    int i = 0;
-    while (JitRXStart != NULL)
+    // Preferred path: map the JIT buffer as process code memory next to our
+    // own image. Needs the process handle that hbloader passes on real
+    // hardware; emulators such as Ryujinx don't provide it.
+    Handle ownProcess = envGetOwnProcessHandle();
+    if (ownProcess != INVALID_HANDLE)
     {
-        svcQueryMemory(&info, &pageInfo, (u64)JitRXStart);
-        if (info.type != MemType_Unmapped)
-            JitRXStart = (void*)((u8*)info.addr - JitMemSize - 0x1000);
-        else
-            break;
-        if (i++ > 8)
+        JitRWBase = aligned_alloc(0x1000, JitMemSize);
+        JitRXStart = (u8*)&__start__ - JitMemSize - 0x1000;
+        virtmemLock();
+        JitRWStart = virtmemFindAslr(JitMemSize, 0x1000);
+        MemoryInfo info = {0};
+        u32 pageInfo = {0};
+        int i = 0;
+        while (JitRXStart != NULL)
         {
-            printf("couldn't find unmapped place for jit memory\n");
+            svcQueryMemory(&info, &pageInfo, (u64)JitRXStart);
+            if (info.type != MemType_Unmapped)
+                JitRXStart = (void*)((u8*)info.addr - JitMemSize - 0x1000);
+            else
+                break;
+            if (i++ > 8)
+            {
+                printf("couldn't find unmapped place for jit memory\n");
+                JitRXStart = NULL;
+            }
+        }
+
+        if (JitRXStart != NULL && JitRWStart != NULL
+            && R_SUCCEEDED(svcMapProcessCodeMemory(ownProcess, (u64)JitRXStart, (u64)JitRWBase, JitMemSize)))
+        {
+            if (R_SUCCEEDED(svcSetProcessMemoryPermission(ownProcess, (u64)JitRXStart, JitMemSize, Perm_Rx))
+                && R_SUCCEEDED(svcMapProcessMemory(JitRWStart, ownProcess, (u64)JitRXStart, JitMemSize)))
+                JitMemMode = 0;
+            else
+                svcUnmapProcessCodeMemory(ownProcess, (u64)JitRXStart, (u64)JitRWBase, JitMemSize);
+        }
+        virtmemUnlock();
+
+        if (JitMemMode != 0)
+        {
+            free(JitRWBase);
+            JitRWBase = NULL;
+            JitRWStart = NULL;
             JitRXStart = NULL;
         }
     }
 
-    assert(JitRXStart != NULL);
+    // Fallback: libnx JIT buffer (uses the CodeMemory syscalls when no
+    // process handle is available).
+    if (JitMemMode != 0)
+    {
+        Jit* jit = new Jit;
+        if (R_SUCCEEDED(jitCreate(jit, JitMemSize)))
+        {
+            JitBuffer = jit;
+            JitRWStart = jitGetRwAddr(jit);
+            JitRXStart = jitGetRxAddr(jit);
+            JitMemMode = 1;
+            printf("JIT: using libnx jit buffer (type %d)\n", (int)jit->type);
+        }
+        else
+        {
+            delete jit;
+        }
+    }
 
-    bool succeded = R_SUCCEEDED(svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64)JitRXStart, (u64)JitRWBase, JitMemSize));
-    assert(succeded);
-    succeded = R_SUCCEEDED(svcSetProcessMemoryPermission(envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize, Perm_Rx));
-    assert(succeded);
-    succeded = R_SUCCEEDED(svcMapProcessMemory(JitRWStart, envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize));
-    assert(succeded);
-
-    virtmemUnlock();
+    // Last resort: plain memory so nothing crashes; the JIT cannot run.
+    if (JitMemMode != 0 && JitMemMode != 1)
+    {
+        printf("JIT: no executable memory available, JIT disabled\n");
+        JitRWBase = aligned_alloc(0x1000, JitMemSize);
+        JitRWStart = JitRWBase;
+        JitRXStart = JitRWBase;
+        JitMemMode = 2;
+        Config::JIT_Enable = false;
+    }
 
     SetCodeBase((u8*)JitRWStart, (u8*)JitRXStart);
     JitMemMainSize = JitMemSize;
@@ -470,12 +520,21 @@ Compiler::Compiler()
 Compiler::~Compiler()
 {
 #ifdef __SWITCH__
-    if (JitRWStart != NULL)
+    if (JitMemMode == 0)
     {
         bool succeded = R_SUCCEEDED(svcUnmapProcessMemory(JitRWStart, envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize));
         assert(succeded);
         succeded = R_SUCCEEDED(svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (u64)JitRXStart, (u64)JitRWBase, JitMemSize));
         assert(succeded);
+        free(JitRWBase);
+    }
+    else if (JitMemMode == 1)
+    {
+        jitClose((Jit*)JitBuffer);
+        delete (Jit*)JitBuffer;
+    }
+    else if (JitMemMode == 2)
+    {
         free(JitRWBase);
     }
 #endif

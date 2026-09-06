@@ -35,6 +35,7 @@
 #endif
 
 #include "ARMJIT_Memory.h"
+#include "Config.h"
 
 #include "ARMJIT_Internal.h"
 #include "ARMJIT_Compiler.h"
@@ -308,6 +309,7 @@ u8 MappingStatus7[1 << (32-12)];
 VirtmemReservation* FastMem9Reservation, *FastMem7Reservation;
 u8* MemoryBase;
 u8* MemoryBaseCodeMem;
+bool FastMemAvailable = false;
 #elif defined(_WIN32)
 u8* MemoryBase;
 HANDLE MemoryFile;
@@ -710,24 +712,44 @@ void Init()
     virtmemLock();
     MemoryBaseCodeMem = (u8*)virtmemFindCodeMemory(MemoryTotalSize, 0x1000);
 
-    bool succeded = R_SUCCEEDED(svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem, 
-        (u64)MemoryBase, MemoryTotalSize));
-    assert(succeded);
-    succeded = R_SUCCEEDED(svcSetProcessMemoryPermission(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem, 
-        MemoryTotalSize, Perm_Rw));
-    assert(succeded);
+    // Mapping the emulated memory as process code memory needs our own process
+    // handle. hbloader provides it on real hardware, but emulators (Ryujinx)
+    // don't, so fall back to plain heap memory without fastmem in that case.
+    Handle ownProcess = envGetOwnProcessHandle();
+    FastMemAvailable = ownProcess != INVALID_HANDLE
+        && R_SUCCEEDED(svcMapProcessCodeMemory(ownProcess, (u64)MemoryBaseCodeMem,
+            (u64)MemoryBase, MemoryTotalSize));
+    if (FastMemAvailable && R_FAILED(svcSetProcessMemoryPermission(ownProcess, (u64)MemoryBaseCodeMem,
+            MemoryTotalSize, Perm_Rw)))
+    {
+        svcUnmapProcessCodeMemory(ownProcess, (u64)MemoryBaseCodeMem, (u64)MemoryBase, MemoryTotalSize);
+        FastMemAvailable = false;
+    }
 
-    // 8 GB of address space, just don't ask...
-    FastMem9Start = virtmemFindAslr(AddrSpaceSize, 0x1000);
-    assert(FastMem9Start);
-    FastMem7Start = virtmemFindAslr(AddrSpaceSize, 0x1000);
-    assert(FastMem7Start);
+    u8* basePtr;
+    if (FastMemAvailable)
+    {
+        // 8 GB of address space, just don't ask...
+        FastMem9Start = virtmemFindAslr(AddrSpaceSize, 0x1000);
+        assert(FastMem9Start);
+        FastMem7Start = virtmemFindAslr(AddrSpaceSize, 0x1000);
+        assert(FastMem7Start);
 
-    FastMem9Reservation = virtmemAddReservation(FastMem9Start, AddrSpaceSize);
-    FastMem7Reservation = virtmemAddReservation(FastMem7Start, AddrSpaceSize);
+        FastMem9Reservation = virtmemAddReservation(FastMem9Start, AddrSpaceSize);
+        FastMem7Reservation = virtmemAddReservation(FastMem7Start, AddrSpaceSize);
+        basePtr = MemoryBaseCodeMem;
+    }
+    else
+    {
+        printf("ARMJIT_Memory: no process handle, fastmem disabled\n");
+        FastMem9Start = nullptr;
+        FastMem7Start = nullptr;
+        FastMem9Reservation = nullptr;
+        FastMem7Reservation = nullptr;
+        Config::JIT_FastMemory = false;
+        basePtr = MemoryBase;
+    }
     virtmemUnlock();
-
-    u8* basePtr = MemoryBaseCodeMem;
 #elif defined(_WIN32)
     ExceptionHandlerHandle = AddVectoredExceptionHandler(1, ExceptionHandler);
 
@@ -817,12 +839,15 @@ void Init()
 void DeInit()
 {
 #if defined(__SWITCH__)
-    virtmemLock();
-    virtmemRemoveReservation(FastMem9Reservation);
-    virtmemRemoveReservation(FastMem7Reservation);
-    virtmemUnlock();
+    if (FastMemAvailable)
+    {
+        virtmemLock();
+        virtmemRemoveReservation(FastMem9Reservation);
+        virtmemRemoveReservation(FastMem7Reservation);
+        virtmemUnlock();
 
-    svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem, (u64)MemoryBase, MemoryTotalSize);
+        svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (u64)MemoryBaseCodeMem, (u64)MemoryBase, MemoryTotalSize);
+    }
     free(MemoryBase);
 #elif defined(_WIN32)
     assert(UnmapViewOfFile(MemoryBase));

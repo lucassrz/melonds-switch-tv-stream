@@ -11,6 +11,7 @@
 #include "NDS.h"
 #include "GPU.h"
 #include "GPU2D_Deko.h"
+#include "Stream.h"
 #include "SPU.h"
 #include "FrontendUtil.h"
 #include "Config.h"
@@ -232,6 +233,10 @@ void AudioOutput(void *args)
 
                 if (nSamples > 0)
                 {
+                    // the TV gets the samples; the Switch stays silent in that case
+                    if (Stream::OnAudio(data, nSamples, 32823))
+                        memset(data, 0, nSamples * 2 * sizeof(s16));
+
                     u32 last = ((u32*)data)[nSamples - 1];
                     while (nSamples < 768)
                         ((u32*)data)[nSamples++] = last;
@@ -748,7 +753,11 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
 
     if (State != emuState_Nothing)
     {
-        Gfx::WaitForFenceReady(((GPU2D::DekoRenderer*)GPU::GPU2D_Renderer.get())->FramebufferReady[GPU::FrontBuffer]);
+        GPU2D::DekoRenderer* renderer2D = (GPU2D::DekoRenderer*)GPU::GPU2D_Renderer.get();
+        Gfx::WaitForFenceReady(renderer2D->FramebufferReady[GPU::FrontBuffer]);
+        if (State == emuState_Running && Stream::Enabled())
+            Stream::OnFrame(Gfx::DataHeap->CpuAddr<u8>(renderer2D->GetStreamCapture(GPU::FrontBuffer)));
+        renderer2D->SetStreamCapture(Stream::Enabled());
         Gfx::SetSampler((Config::Filtering == 0 ? Gfx::sampler_Nearest : Gfx::sampler_Linear) | Gfx::sampler_ClampToEdge);
         for (int i = 0; i < ScreensVisible; i++)
         {
@@ -801,6 +810,14 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
 
         float averageFrametime = sum / (float)FrametimeHistogramLen;
         Gfx::DrawText(Gfx::SystemFontStandard, {0.f, 0.f}, TextLineHeight, WidgetColorBright, "avg: %.2fms min %.2fms max: %.2fms\n\nprof: %.2fms", averageFrametime, min, max, Profiler::Sum);
+        if (Stream::Enabled())
+        {
+            Gfx::DrawRectangle({0.f, TextLineHeight * 4.f}, {4.f*FrametimeHistogramLen, TextLineHeight}, DarkColorTransparent);
+            Gfx::DrawText(Gfx::SystemFontStandard, {0.f, TextLineHeight * 4.f}, TextLineHeight, WidgetColorBright,
+                "stream: %u frames %u pkts %u errs (errno %d) jpeg %u B enc %u us",
+                Stream::FramesSent(), Stream::PacketsSent(), Stream::SendErrors(), Stream::LastErrno(),
+                Stream::LastFrameBytes(), Stream::EncodeMicros());
+        }
     }
 
     Profiler::Clear();
@@ -959,10 +976,13 @@ void UpdateScreenLayout()
         std::swap(screenWidth, screenHeight);
     const int screengap[] = {0, 1, 8, 16, 32, 64, 90, 128};
     const float aspectratios[] = {1, (16.f/9.f)/(4.f/3.f)};
+    int sizing = Config::ScreenSizing == 3 ? AutoScreenSizing : Config::ScreenSizing;
+    if (Config::StreamHideTop && Stream::Enabled())
+        sizing = 5; // bottom only: the top screen is on the TV
     Frontend::SetupScreenLayout(screenWidth, screenHeight,
         Config::ScreenLayout,
         Config::ScreenRotation,
-        Config::ScreenSizing == 3 ? AutoScreenSizing : Config::ScreenSizing,
+        sizing,
         screengap[Config::ScreenGap],
         Config::IntegerScaling,
         Config::ScreenSwap,
@@ -1028,6 +1048,8 @@ int main(int argc, const char* argv[])
     appletHook(&aptCookie, OnAppletHook, NULL);
 
     Config::Load();
+
+    Stream::Init();
     
     strcpy(Config::FirmwarePath, "firmware.bin");
     strcpy(Config::BIOS9Path, "bios9.bin");
@@ -1147,6 +1169,8 @@ int main(int argc, const char* argv[])
     appletUnhook(&aptCookie);
 
     Gfx::DeInit();
+
+    Stream::DeInit();
 
     setExit();
     romfsExit();

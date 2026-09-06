@@ -3,6 +3,7 @@
 #include "Style.h"
 #include "KeyExplanations.h"
 #include "BackButton.h"
+#include "Stream.h"
 #include "main.h"
 
 #include <switch.h>
@@ -28,6 +29,8 @@ namespace SettingsDialog
 const char* SettingsPrefix = "settingsdialog_entries";
 
 const char* ComboboxElementPrefix = "settings_combobox";
+
+const int MaxDiscoveredOptions = 8;
 
 void DoSlider(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name, int& value, int low, int high, bool first = false)
 {
@@ -751,6 +754,67 @@ void DoGui(BoxGui::Frame& parent)
             Config::IntegerScaling = integerScaling;
             DoCombobox(settingsFrame, settingsSkewer, "Filtering", "Nearest\0Linear\0", Config::Filtering);
             DoCombobox(settingsFrame, settingsSkewer, "Upscaler (NOT WORKING)", "1x\0002x\0003x\0004x\0", Config::upscaleFactor);
+        }
+        {
+            SectionHeader(settingsFrame, settingsSkewer, "Top screen streaming");
+            bool streamEnable = Config::StreamEnable;
+            DoCheckbox(settingsFrame, settingsSkewer, "Stream top screen to a TV over wifi", streamEnable);
+            Config::StreamEnable = streamEnable;
+            if (streamEnable)
+            {
+                // list of receivers found on the network; the buffer must outlive
+                // the combobox dialog, which keeps a pointer to it
+                static char tvOptions[MaxDiscoveredOptions * 96 + 64];
+                static int tvSelection = 0;
+                static int tvApplied = 0;
+                static int tvLastCount = -1;
+                Stream::DiscoveryTick();
+                int count = std::min(Stream::DiscoveredCount(), MaxDiscoveredOptions);
+                char* p = tvOptions;
+                p += sprintf(p, "%s", count ? "Choose a TV..." : "Searching for TVs... (start the melonDS TV app)") + 1;
+                int current = 0;
+                for (int i = 0; i < count; i++)
+                {
+                    const Stream::Device& dev = Stream::Discovered(i);
+                    if (strcmp(dev.Host, Config::StreamHost) == 0)
+                        current = i + 1;
+                    p += snprintf(p, 96, "%s (%s)", dev.Name, dev.Host) + 1;
+                }
+                *p = '\0';
+                if (count != tvLastCount)
+                {
+                    // the list changed: re-sync the selection with the configured host
+                    tvSelection = current;
+                    tvApplied = current;
+                    tvLastCount = count;
+                }
+                DoCombobox(settingsFrame, settingsSkewer, "TVs found", tvOptions, tvSelection);
+                if (tvSelection != tvApplied)
+                {
+                    if (tvSelection >= 1 && tvSelection <= count)
+                    {
+                        strncpy(Config::StreamHost, Stream::Discovered(tvSelection - 1).Host, sizeof(Config::StreamHost) - 1);
+                        Config::StreamHost[sizeof(Config::StreamHost) - 1] = '\0';
+                    }
+                    tvApplied = tvSelection;
+                }
+
+                DoTextField(settingsFrame, settingsSkewer, "TV address (manual)", Config::StreamHost, sizeof(Config::StreamHost));
+
+                bool hideTop = Config::StreamHideTop;
+                DoCheckbox(settingsFrame, settingsSkewer, "Show only the bottom screen on the Switch", hideTop);
+                Config::StreamHideTop = hideTop;
+
+                DoCombobox(settingsFrame, settingsSkewer, "Image", "JPEG (less bandwidth)\0Lossless (best quality, needs a strong wifi)\0Auto (lossless for 2D, JPEG for 3D)\0", Config::StreamCodec);
+                if (Config::StreamCodec != 1)
+                    DoSlider(settingsFrame, settingsSkewer, "JPEG quality (90+ keeps colors sharp)", Config::StreamQuality, 10, 100);
+                DoCombobox(settingsFrame, settingsSkewer, "Audio", "Switch speakers\0TV\0", Config::StreamAudio);
+                int frameSkip = Config::StreamFrameSkip - 1;
+                if (frameSkip < 0) frameSkip = 0;
+                if (frameSkip > 2) frameSkip = 2;
+                DoCombobox(settingsFrame, settingsSkewer, "Send", "Every frame (60 fps)\0Every 2nd frame (30 fps)\0Every 3rd frame (20 fps)\0", frameSkip);
+                Config::StreamFrameSkip = frameSkip + 1;
+            }
         }
         Emulation::UpdateScreenLayout();
         break;

@@ -10,6 +10,23 @@
 
 #include <assert.h>
 
+// Ryujinx caches inline uniform buffer updates in a 2 KiB buffer and throws on
+// a single larger update, while real hardware accepts up to 32 KiB. Split big
+// pushes so the same binary runs on both.
+static void PushConstantsChunked(dk::CmdBuf& cmdbuf, DkGpuAddr uboAddr, u32 uboSize, u32 offset, u32 size, const void* data)
+{
+    const u32 maxChunk = 2048;
+    const u8* src = (const u8*)data;
+    while (size > 0)
+    {
+        u32 chunk = size > maxChunk ? maxChunk : size;
+        cmdbuf.pushConstants(uboAddr, uboSize, offset, chunk, src);
+        offset += chunk;
+        src += chunk;
+        size -= chunk;
+    }
+}
+
 using Gfx::EmuCmdBuf;
 using Gfx::EmuQueue;
 
@@ -122,6 +139,8 @@ DekoRenderer::DekoRenderer() :
     BGOBJTexture.initialize(intermedFbLayout, Gfx::TextureHeap->MemBlock, BGOBJTextureMemory.Offset);
 
     DisplayCaptureMemory = Gfx::DataHeap->Alloc(256*192*4, 64);
+    for (int i = 0; i < 2; i++)
+        StreamCaptureMemory[i] = Gfx::DataHeap->Alloc(256*192*4, 64);
 
     dk::ImageLayout disabledBGLayout;
     dk::ImageLayoutMaker{Gfx::Device}
@@ -598,6 +617,13 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
 
         if (unit->Num == 1)
         {
+            if (StreamCaptureEnabled)
+            {
+                // index 0 is the top screen (see ComposeBGOBJ and ScreenKinds)
+                dk::ImageView src{FinalFramebuffers[GPU::FrontBuffer^1][0]};
+                EmuCmdBuf.copyImageToBuffer(src, {0, 0, 0, 256, 192, 1},
+                    {Gfx::DataHeap->GpuAddr(StreamCaptureMemory[GPU::FrontBuffer^1])});
+            }
             EmuCmdBuf.signalFence(FramebufferReady[GPU::FrontBuffer^1]);
             EmuQueue.submitCommands(CmdMem.End(EmuCmdBuf));
             EmuQueue.flush();
@@ -1806,7 +1832,7 @@ void DekoRenderer::FlushBGDraw(u32 curline, u32 bgmask)
                 EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize,
                     offsetof(BGUniform, Text), sizeof(BGUniform::Text),
                     &BGTextUniforms[CurUnit->Num][i].Text);
-                EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize,
+                PushConstantsChunked(EmuCmdBuf, Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize,
                     offsetof(BGUniform, PerLineData) + firstLine*4*4, 4*4*linesCount,
                     &BGTextUniforms[CurUnit->Num][i].PerLineData[firstLine*4]);
                 dk::Shader* shaders[] =
@@ -1852,7 +1878,7 @@ void DekoRenderer::ComposeBGOBJ()
     });
 
     EmuCmdBuf.bindUniformBuffer(DkStage_Fragment, 0, Gfx::DataHeap->GpuAddr(ComposeUniformMemory), ComposeUniformSize);
-    EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(ComposeUniformMemory), ComposeUniformSize,
+    PushConstantsChunked(EmuCmdBuf, Gfx::DataHeap->GpuAddr(ComposeUniformMemory), ComposeUniformSize,
         offsetof(ComposeUniform, Window), sizeof(ComposeUniforms[CurUnit->Num].Window),
         &ComposeUniforms[CurUnit->Num].Window);
 
