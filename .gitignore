@@ -1,0 +1,29 @@
+# build artifacts
+*.nro
+*.elf
+*.nacp
+*.apk
+switch/build/
+android-tv/build/
+android-tv/.gradle/
+android-tv/local.properties
+android-tv/app/build/
+
+# never publish copyrighted dumps or keys
+bios7.bin
+bios9.bin
+firmware.bin
+biosdsi7.rom
+biosdsi9.rom
+nand.bin
+prod.keys
+title.keys
+*.nds
+*.dsi
+*.srl
+*.sav
+
+# tooling and OS files
+tools/.venv/
+.DS_Store
+.idea/
