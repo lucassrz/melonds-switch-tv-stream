@@ -85,33 +85,50 @@ class StreamView(context: Context) : View(context) {
     private val rectF = RectF()
 
     /** Called from the receiver thread. Decodes here, hands the bitmap to the UI thread. */
-    fun submit(codec: StreamReceiver.Codec, data: ByteArray) {
+    // Two bitmaps: one being decoded into while the other is on screen.
+    private val bitmaps = arrayOfNulls<Bitmap>(2)
+    private var decodeIndex = 0
+
+    /** Longest interval between two draws, in ms, since the last reset. */
+    @Volatile var maxDrawGapMs = 0L
+    private var lastDrawNanos = 0L
+
+    fun submit(codec: StreamReceiver.Codec, data: ByteArray, length: Int) {
+        val target = bitmaps[decodeIndex]
         val decoded: Bitmap = when (codec) {
-            StreamReceiver.Codec.JPEG -> decodeJpeg(data) ?: return
+            StreamReceiver.Codec.JPEG -> decodeJpeg(data, length, target) ?: return
             StreamReceiver.Codec.QOI -> {
-                val img = Qoi.decode(data, qoiPixels) ?: return
+                val img = Qoi.decode(data, qoiPixels, length) ?: return
                 qoiPixels = img.pixels
-                Qoi.toBitmap(img, frame)
+                Qoi.toBitmap(img, target)
             }
         }
+        bitmaps[decodeIndex] = decoded
+        decodeIndex = 1 - decodeIndex
         post {
             frame = decoded
             invalidate()
         }
     }
 
-    private fun decodeJpeg(jpeg: ByteArray): Bitmap? {
-        val reuse = frame
+    private fun decodeJpeg(jpeg: ByteArray, length: Int, reuse: Bitmap?): Bitmap? {
         decodeOptions.inBitmap = if (reuse != null && !reuse.isRecycled && reuse.isMutable) reuse else null
         return try {
-            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, decodeOptions)
+            BitmapFactory.decodeByteArray(jpeg, 0, length, decodeOptions)
         } catch (e: IllegalArgumentException) {
             decodeOptions.inBitmap = null
-            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, decodeOptions)
+            BitmapFactory.decodeByteArray(jpeg, 0, length, decodeOptions)
         }
     }
 
     override fun onDraw(canvas: Canvas) {
+        val now = System.nanoTime()
+        if (receiving && lastDrawNanos != 0L) {
+            val gap = (now - lastDrawNanos) / 1_000_000
+            if (gap > maxDrawGapMs) maxDrawGapMs = gap
+        }
+        lastDrawNanos = now
+
         val bmp = frame
         if (receiving && bmp != null && width > 0 && height > 0) {
             canvas.drawColor(Color.BLACK)

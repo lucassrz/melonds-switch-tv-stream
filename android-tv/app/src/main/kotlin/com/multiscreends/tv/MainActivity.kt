@@ -45,6 +45,7 @@ class MainActivity : Activity() {
     private var responder: DiscoveryResponder? = null
     private val audio = AudioPlayer()
     private val handler = Handler(Looper.getMainLooper())
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     private var lastStatsFrames = 0L
     private var lastStatsBytes = 0L
@@ -120,14 +121,30 @@ class MainActivity : Activity() {
         audio.start()
         receiver = StreamReceiver(
             PORT,
-            onFrame = { _, codec, data -> view.submit(codec, data) },
+            onFrame = { _, codec, data, length -> view.submit(codec, data, length) },
             onAudio = { seq, rate, pcm -> audio.submit(seq, rate, pcm) },
         ).also { it.start() }
         responder = DiscoveryResponder(DISCOVERY_PORT, PORT, deviceName()).also { it.start() }
         lastStatsTime = System.nanoTime()
         view.waitingTitle = deviceName()
+        acquireWifiLock()
         handler.post(statsTick)
         updateStatus()
+    }
+
+    /** Keeps the wifi radio out of power saving while the app is in front: the
+     *  periodic sleeps otherwise show up as small regular hiccups in the stream. */
+    private fun acquireWifiLock() {
+        try {
+            val wm = applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager
+            @Suppress("DEPRECATION")
+            val mode = if (android.os.Build.VERSION.SDK_INT >= 29)
+                android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            else android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            wifiLock = wm.createWifiLock(mode, "melonds-tv").also { it.setReferenceCounted(false); it.acquire() }
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "wifi lock unavailable: ${e.message}")
+        }
     }
 
     override fun onStop() {
@@ -137,6 +154,8 @@ class MainActivity : Activity() {
         responder?.stop()
         responder = null
         audio.stop()
+        try { wifiLock?.release() } catch (e: Exception) { }
+        wifiLock = null
         super.onStop()
     }
 
@@ -192,8 +211,12 @@ class MainActivity : Activity() {
                 r.stats.audioPackets > 0 -> "audio ${audio.trackRate} Hz"
                 else -> "audio on Switch"
             }
-            String.format("%.0f fps   %.0f kbit/s   %s   %s   lost frames %d   %s",
-                fps, kbps, codec, audioState, r.stats.incomplete, prefs.scaling.label.lowercase())
+            val line = String.format("%.0f fps   %.0f kbit/s   %s   %s   lost %d   net gap %d ms   draw gap %d ms   %s",
+                fps, kbps, codec, audioState, r.stats.incomplete, r.stats.maxGapMs, view.maxDrawGapMs,
+                prefs.scaling.label.lowercase())
+            r.stats.resetGap()
+            view.maxDrawGapMs = 0
+            line
         } else null
     }
 

@@ -39,7 +39,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class StreamReceiver(
     private val port: Int,
-    private val onFrame: (frameId: Long, codec: Codec, data: ByteArray) -> Unit,
+    /** data is a pooled buffer: only the first `length` bytes are valid and it must not be kept. */
+    private val onFrame: (frameId: Long, codec: Codec, data: ByteArray, length: Int) -> Unit,
     private val onAudio: (sequence: Long, sampleRate: Int, pcm: ByteArray) -> Unit,
 ) {
     enum class Codec { JPEG, QOI }
@@ -61,14 +62,27 @@ class StreamReceiver(
         @Volatile var audioPackets = 0L
         @Volatile var lastFrameNanos = 0L
         @Volatile var codec: Codec? = null
+        /** Longest interval between two complete frames since the last reset, in ms. */
+        @Volatile var maxGapMs = 0L
+        fun resetGap() { maxGapMs = 0L }
     }
 
     val stats = Stats()
 
-    private class Pending(total: Int, val partCount: Int) {
-        val buffer = ByteArray(total)
+    private class Pending(val total: Int, val partCount: Int, val buffer: ByteArray) {
         val received = BooleanArray(partCount)
         var receivedCount = 0
+    }
+
+    // Reused frame buffers: allocating 20-60 KB per frame at 60 fps keeps the
+    // garbage collector busy, which shows up as periodic hiccups.
+    private val bufferPool = ArrayDeque<ByteArray>()
+    private fun takeBuffer(size: Int): ByteArray {
+        val b = bufferPool.removeFirstOrNull()
+        return if (b != null && b.size >= size) b else ByteArray(maxOf(size, 96 * 1024))
+    }
+    private fun giveBackBuffer(b: ByteArray) {
+        if (bufferPool.size < 16) bufferPool.addLast(b)
     }
 
     private val running = AtomicBoolean(false)
@@ -154,11 +168,12 @@ class StreamReceiver(
 
         var entry = pending[frameId]
         if (entry == null) {
-            entry = Pending(total, count)
+            entry = Pending(total, count, takeBuffer(total))
             pending[frameId] = entry
             // forget frames that are too old to ever complete
             val stale = pending.headMap(frameId - MAX_PENDING)
             stats.incomplete += stale.size
+            for (old in stale.values) giveBackBuffer(old.buffer)
             stale.clear()
         }
 
@@ -170,11 +185,17 @@ class StreamReceiver(
 
         if (entry.receivedCount == entry.partCount) {
             pending.remove(frameId)
+            val now = System.nanoTime()
+            if (stats.lastFrameNanos != 0L) {
+                val gapMs = (now - stats.lastFrameNanos) / 1_000_000
+                if (gapMs > stats.maxGapMs) stats.maxGapMs = gapMs
+            }
             stats.frames++
             stats.bytes += total
-            stats.lastFrameNanos = System.nanoTime()
+            stats.lastFrameNanos = now
             stats.codec = codec
-            onFrame(frameId, codec, entry.buffer)
+            onFrame(frameId, codec, entry.buffer, entry.total)
+            giveBackBuffer(entry.buffer)
         }
     }
 }

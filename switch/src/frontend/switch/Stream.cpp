@@ -232,7 +232,13 @@ static void Worker(void*)
 
         u64 encodeStart = armGetSystemTick();
         bool sent = false;
-        if (Config::StreamCodec != 0)
+        // In Auto mode, once a frame was too big for lossless (typically a 3D
+        // scene) skip the lossless attempt for a while instead of encoding
+        // every frame twice; retry now and then so 2D scenes go back to lossless.
+        static u32 autoSkipLossless = 0;
+        bool tryLossless = Config::StreamCodec == 1
+            || (Config::StreamCodec == 2 && (autoSkipLossless == 0 || --autoSkipLossless == 0));
+        if (tryLossless)
         {
             // lossless: drop the alpha channel, then QOI
             static u8 rgb[ScreenWidth * ScreenHeight * 3];
@@ -250,6 +256,8 @@ static void Worker(void*)
                 // "Auto" (codec 2): 3D scenes compress badly losslessly and would flood
                 // the wifi; above the budget the frame is sent as JPEG instead.
                 bool tooBig = Config::StreamCodec == 2 && len > AutoLosslessMaxBytes;
+                if (tooBig)
+                    autoSkipLossless = 30; // JPEG only for the next half second
                 if (!tooBig)
                 {
                     StatEncodeUs = armTicksToNs(armGetSystemTick() - encodeStart) / 1000;

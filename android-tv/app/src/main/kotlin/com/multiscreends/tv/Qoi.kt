@@ -37,8 +37,8 @@ object Qoi {
             ((d[o + 2].toInt() and 0xFF) shl 8) or (d[o + 3].toInt() and 0xFF)
 
     /** Returns null if the data is not a valid QOI file. Pixels are ARGB (Bitmap order). */
-    fun decode(d: ByteArray, reuse: IntArray? = null): Image? {
-        if (d.size < 22) return null
+    fun decode(d: ByteArray, reuse: IntArray? = null, length: Int = d.size): Image? {
+        if (length < 22 || length > d.size) return null
         if (d[0] != 'q'.code.toByte() || d[1] != 'o'.code.toByte() || d[2] != 'i'.code.toByte() || d[3] != 'f'.code.toByte()) return null
         val width = u32be(d, 4)
         val height = u32be(d, 8)
@@ -51,7 +51,7 @@ object Qoi {
         var r = 0; var g = 0; var b = 0; var a = 255
         var p = 14
         var pos = 0
-        val end = d.size - 8 // 8 byte end marker
+        val end = length - 8 // 8 byte end marker
         var run = 0
 
         while (pos < count) {
