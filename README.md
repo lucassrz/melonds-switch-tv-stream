@@ -20,7 +20,7 @@ Both devices only need to be on the same wifi network. The Switch finds the TV b
 
 | Part            | State                                                                   |
 |-----------------|-------------------------------------------------------------------------|
-| Switch homebrew | Streams at 60 fps (validated in an emulator, real-console test pending) |
+| Switch homebrew | Tested on a real Switch: full speed with the TV stream on            |
 | Android TV app  | Tested on an Android 14 TV                                              |
 
 ## Features
@@ -51,6 +51,9 @@ Both devices only need to be on the same wifi network. The Switch finds the TV b
 3. Start melonDS, open **Settings > Display > Top screen streaming**, enable streaming and
    pick your TV in **TVs found** (start the TV app first). Choose **Audio: TV** if you want
    the sound on the TV.
+4. Keep the JIT recompiler enabled and the CPU clock at 1785 MHz (**Settings > Emulation**,
+   the defaults of this build). Without them 3D games are far too slow, whether you stream
+   or not.
 
 ### On the Android TV
 

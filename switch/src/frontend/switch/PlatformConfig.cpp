@@ -82,7 +82,7 @@ ConfigEntry PlatformConfigFile[] =
 
     {"LastROMFolder",           1, LastROMFolder,           0, "/", 511},
 
-    {"SwitchOverclock",         0, &SwitchOverclock,        0, NULL, 0},
+    {"SwitchOverclock",         0, &SwitchOverclock,        3, NULL, 0}, // 1785 MHz: needed for 3D games
 
     {"ConsoleType",             0, &ConsoleType,            0, NULL, 0},
     {"DirectBoot",              0, &DirectBoot,             1, NULL, 0},

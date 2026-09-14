@@ -30,7 +30,9 @@ tools/         stream_receiver.py : récepteur de test sur le Mac (venv dans too
   melonDS lit `switch/melonds/` (minuscules) : bios7.bin, bios9.bin, firmware.bin,
   `melonDS.ini` (DS en majuscules).
 - **Le stream fonctionne à 60 fps** de Ryujinx vers `tools/stream_receiver.py`.
-- Pas encore testé sur la vraie console (temps d'encodage, wifi, marge CPU).
+- **Testé sur la vraie Switch le 14 septembre 2026 : tout fonctionne**, jeu fluide avec le stream.
+  Le lag initial venait des défauts amont (JIT off, 1020 MHz) : notre build met JIT on et
+  1785 MHz par défaut (`Config.cpp`, `PlatformConfig.cpp`).
 - **La 3D est noire dans Ryujinx** (le rasteriseur compute deko3d du fork n'est pas émulé par
   Ryujinx/MoltenVK). Limitation de l'émulateur, pas du stream : tester la 3D sur console.
 - Client Android TV testé sur la TV du salon (Android 14, installation par adb en wifi).
@@ -100,13 +102,13 @@ aux releases `v*`. Jamais de BIOS/firmware/ROM/clés dans le dépôt (voir `.git
 Pas d'infos perso (IP de la TV, etc.) dans les fichiers du dépôt.
 
 ## Prochaines étapes
-1. Créer le dépôt GitHub vide `melonds-switch-tv-stream`, ajouter le remote, pousser `main`,
-   vérifier que la CI passe (non testée en local), tagger `v0.1.0`.
+1. Dépôt public https://github.com/lucassrz/melonds-switch-tv-stream, CI verte, v0.1.0 en
+   pré-version puis v0.1.1 après le test console. Nouvelle version = `git tag vX.Y.Z && git push origin vX.Y.Z`.
 2. Flux Ryujinx → TV validé le 6 septembre (APK installé par adb, Android 14). Reste à
    valider dans Ryujinx : la liste "TVs found" (le broadcast du guest doit sortir de
    Ryujinx) et le passage automatique en "Bottom only".
-3. Test sur la vraie Switch : encodage, wifi, marge CPU. Envisager libjpeg-turbo si stb
-   est trop lent.
+3. Mesures fines sur console pas encore relevées (ligne "stream:" enc/errs, frames perdues TV).
+   libjpeg-turbo et l'évitement du double encodage en mode Auto restent des options.
 4. Confort restant : port configurable côté TV, écran de réglages dans l'app TV.
 
 ## Contexte utilisateur
