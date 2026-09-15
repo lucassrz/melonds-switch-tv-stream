@@ -36,6 +36,8 @@
 
 #include "RetroAchievements.h"
 #include "NotificationSystem.h"
+
+#include <sys/stat.h>
 #include "TriggerNotification.h"
 #include "RATracker.h"
 #include "InputConfig.h"
@@ -877,7 +879,9 @@ void LoadROM(const char* file)
     Overclocking::ApplyOverclock(Config::SwitchOverclock);
 
     assert(State == emuState_Nothing);
+    u64 loadStart = armGetSystemTick();
     int res = Frontend::LoadROM(file, 0);
+    u64 loadEnd = armGetSystemTick();
     if (res != Frontend::Load_OK)
     {
         ErrorDialog::Open(GetLoadErrorStr(res));
@@ -889,8 +893,22 @@ void LoadROM(const char* file)
         CurrentUiScreen = uiScreen_Start;
     }
 
-    load_game_from_file(file);
-    
+    // RetroAchievements hashes the ROM and talks to its servers: only worth it
+    // when an account is configured.
+    if (Config::RetroAchievementsUsername[0] != '\0')
+        load_game_from_file(file);
+    u64 raEnd = armGetSystemTick();
+
+    if (Config::ShowPerformanceMetrics && res == Frontend::Load_OK)
+    {
+        struct stat st;
+        long sizeMB = stat(file, &st) == 0 ? (long)(st.st_size / (1024 * 1024)) : -1;
+        g_notification.Show("ROM loaded in %.1f s (%ld MB read + emulator %.1f s, RetroAchievements %.1f s)",
+            armTicksToNs(raEnd - loadStart) / 1e9, sizeMB,
+            armTicksToNs(loadEnd - loadStart) / 1e9,
+            armTicksToNs(raEnd - loadEnd) / 1e9);
+    }
+
     // TODO: add a setting to toggle on/off
     Frontend::EnableCheats(true);
 }
