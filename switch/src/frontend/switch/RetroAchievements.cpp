@@ -126,8 +126,6 @@ const char* send_http_request(const char* url, const char* post_data, int* statu
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, switch_curl_write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
