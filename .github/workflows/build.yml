@@ -39,9 +39,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
-      - name: Accept SDK licenses
-        run: yes | sdkmanager --licenses > /dev/null || true
+      - name: Accept Android SDK licenses (SDK preinstalled on the runner)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - name: Build debug APK
         working-directory: android-tv
         run: ./gradlew assembleDebug --no-daemon
