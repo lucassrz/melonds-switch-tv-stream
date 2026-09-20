@@ -47,6 +47,7 @@ extern int notification;
 // Top-screen streaming over the network (see Stream.cpp)
 extern int StreamEnable;
 extern char StreamHost[64];
+extern char StreamHostName[64];
 extern int StreamPort;
 extern int StreamQuality;
 extern int StreamFrameSkip;

@@ -684,11 +684,19 @@ void DoGui(BoxGui::Frame& parent)
                     {
                         strncpy(Config::StreamHost, Stream::Discovered(tvSelection - 1).Host, sizeof(Config::StreamHost) - 1);
                         Config::StreamHost[sizeof(Config::StreamHost) - 1] = '\0';
+                        strncpy(Config::StreamHostName, Stream::Discovered(tvSelection - 1).Name, sizeof(Config::StreamHostName) - 1);
+                        Config::StreamHostName[sizeof(Config::StreamHostName) - 1] = '\0';
                     }
                     tvApplied = tvSelection;
                 }
 
-                DoTextField(settingsFrame, settingsSkewer, "TV address (manual)", Config::StreamHost, sizeof(Config::StreamHost));
+                {
+                    char before[64];
+                    strncpy(before, Config::StreamHost, sizeof(before));
+                    DoTextField(settingsFrame, settingsSkewer, "TV address (manual)", Config::StreamHost, sizeof(Config::StreamHost));
+                    if (strcmp(before, Config::StreamHost) != 0)
+                        Config::StreamHostName[0] = '\0';
+                }
 
                 bool hideTop = Config::StreamHideTop;
                 DoCheckbox(settingsFrame, settingsSkewer, "Show only the bottom screen on the Switch", hideTop);

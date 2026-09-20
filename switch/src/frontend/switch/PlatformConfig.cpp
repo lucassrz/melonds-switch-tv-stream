@@ -45,6 +45,7 @@ int notification = 0;
 
 int StreamEnable = 0;
 char StreamHost[64] = "";
+char StreamHostName[64] = "";
 int StreamPort = 9797;
 int StreamQuality = 92;
 int StreamFrameSkip = 1;
@@ -96,6 +97,7 @@ ConfigEntry PlatformConfigFile[] =
 
     {"StreamEnable",            0, &StreamEnable,           0, NULL, 0},
     {"StreamHost",              1, StreamHost,              0, "",   63},
+    {"StreamHostName",          1, StreamHostName,          0, "",   63},
     {"StreamPort",              0, &StreamPort,          9797, NULL, 0},
     {"StreamQuality",           0, &StreamQuality,         92, NULL, 0},
     {"StreamFrameSkip",         0, &StreamFrameSkip,        1, NULL, 0},

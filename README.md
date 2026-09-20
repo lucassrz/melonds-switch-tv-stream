@@ -16,6 +16,10 @@ Both devices only need to be on the same wifi network. The Switch finds the TV b
 
 > Unofficial project, not affiliated with Nintendo, Google or the melonDS team.
 
+![melonDS Switch home screen: sidebar, continue playing card and game library](docs/screenshots/home.jpg)
+
+![Display settings with the top screen streaming section](docs/screenshots/settings.jpg)
+
 ## Status
 
 | Part            | State                                                                   |
@@ -25,6 +29,8 @@ Both devices only need to be on the same wifi network. The Switch finds the TV b
 
 ## Features
 
+- A redesigned interface on the Switch: game library with icons, "continue playing" card,
+  touch-friendly menus, dark theme.
 - Top screen on the TV, bottom screen full size on the Switch, touch works as usual.
 - Lossless picture for 2D games, high-quality JPEG for 3D scenes (automatic), or pick one.
 - Game audio on the TV or on the Switch, your choice.

@@ -177,6 +177,24 @@ static void DrawRomIcon(ROMMetaDatabase::ROMMeta& meta, Gfx::Vector2f position, 
     Gfx::SetSampler(Gfx::sampler_Linear | Gfx::sampler_ClampToEdge);
 }
 
+// DS titles hold the game name and the publisher on separate lines.
+static void SplitTitle(const char* title, std::string& name, std::string& publisher)
+{
+    const char* nl = strchr(title, '\n');
+    if (!nl)
+    {
+        name = title;
+        publisher.clear();
+        return;
+    }
+    name.assign(title, nl - title);
+    publisher = nl + 1;
+    // some titles use a third line for the publisher, keep only the last one
+    size_t last = publisher.rfind('\n');
+    if (last != std::string::npos)
+        publisher = publisher.substr(last + 1);
+}
+
 static void StartGame(const std::string& path, int metaIdx, bool onTV)
 {
     if (onTV)
@@ -247,7 +265,7 @@ static void TVCard(BoxGui::Frame& sidebar, BoxGui::Skewer& skewer)
         Gfx::DrawRoundedOutline(frame.Area.Position, frame.Area.Size, AccentColor, UIRadius, 2.f);
     Gfx::DrawCircle(frame.Area.Position + Gfx::Vector2f{18.f, frame.Area.Size.Y / 2.f}, 4.f, linked ? AccentColor : TextMutedColor);
     Gfx::DrawText(Gfx::SystemFontStandard, frame.Area.Position + Gfx::Vector2f{32.f, 19.f}, TextLineHeight * 0.85f, TextColor,
-        Gfx::align_Left, Gfx::align_Center, linked ? Config::StreamHost : "No TV linked");
+        Gfx::align_Left, Gfx::align_Center, linked ? (Config::StreamHostName[0] ? Config::StreamHostName : Config::StreamHost) : "No TV linked");
     Gfx::DrawText(Gfx::SystemFontStandard, frame.Area.Position + Gfx::Vector2f{32.f, 38.f}, TextLineHeight * 0.7f, TextMutedColor,
         Gfx::align_Left, Gfx::align_Center, linked ? "Top screen goes to the TV" : "Set up TV streaming");
 
@@ -288,10 +306,14 @@ static void DoHome(BoxGui::Frame& mainFrame)
         float textX = pad + iconSize + 24.f;
         Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 4.f}, TextLineHeight * 0.7f, AccentColor,
             Gfx::align_Left, Gfx::align_Center, "CONTINUE PLAYING");
-        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 54.f}, TextLineHeight * 1.6f, TextColor,
-            Gfx::align_Left, Gfx::align_Center, meta.Title(ROMMetaDatabase::TitleLanguage));
+        std::string name, publisher;
+        SplitTitle(meta.Title(ROMMetaDatabase::TitleLanguage), name, publisher);
         const char* file = strrchr(last.Path.c_str(), '/');
-        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 104.f}, TextLineHeight * 0.8f, TextMutedColor,
+        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 46.f}, TextLineHeight * 1.6f, TextColor,
+            Gfx::align_Left, Gfx::align_Center, name.c_str());
+        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 80.f}, TextLineHeight * 0.9f, TextSoftColor,
+            Gfx::align_Left, Gfx::align_Center, publisher.c_str());
+        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 106.f}, TextLineHeight * 0.75f, TextMutedColor,
             Gfx::align_Left, Gfx::align_Center, file ? file + 1 : last.Path.c_str());
 
         const float buttonWidth = 170.f;
@@ -339,7 +361,7 @@ static void DoHome(BoxGui::Frame& mainFrame)
         const float gap = 20.f;
         float tileWidth = (grid.Area.Size.X - gap * (columns - 1)) / columns;
         float iconSize = tileWidth - 28.f;
-        float tileHeight = 14.f + iconSize + 12.f + TextLineHeight * 2.4f + 14.f;
+        float tileHeight = 14.f + iconSize + 12.f + TextLineHeight * 2.1f + 14.f;
 
         for (u32 i = 0; i < Library.size(); i++)
         {
@@ -355,12 +377,13 @@ static void DoHome(BoxGui::Frame& mainFrame)
                 Gfx::DrawRoundedOutline(tile.Area.Position, tile.Area.Size, AccentColor, 16.f, 2.f);
             DrawRomIcon(meta, tile.Area.Position + Gfx::Vector2f{14.f, 14.f}, iconSize, 12.f);
 
+            std::string name, publisher;
+            SplitTitle(meta.Title(ROMMetaDatabase::TitleLanguage), name, publisher);
             Gfx::PushScissor(tile.Area.Position.X, tile.Area.Position.Y, tile.Area.Size.X, tile.Area.Size.Y);
             Gfx::DrawText(Gfx::SystemFontStandard, tile.Area.Position + Gfx::Vector2f{14.f, 14.f + iconSize + 12.f + TextLineHeight * 0.45f},
-                TextLineHeight * 0.85f, TextColor, Gfx::align_Left, Gfx::align_Center, meta.Title(ROMMetaDatabase::TitleLanguage));
-            const char* file = strrchr(Library[i].Path.c_str(), '/');
-            Gfx::DrawText(Gfx::SystemFontStandard, tile.Area.Position + Gfx::Vector2f{14.f, 14.f + iconSize + 12.f + TextLineHeight * 1.8f},
-                TextLineHeight * 0.7f, TextMutedColor, Gfx::align_Left, Gfx::align_Center, file ? file + 1 : "");
+                TextLineHeight * 0.85f, TextColor, Gfx::align_Left, Gfx::align_Center, name.c_str());
+            Gfx::DrawText(Gfx::SystemFontStandard, tile.Area.Position + Gfx::Vector2f{14.f, 14.f + iconSize + 12.f + TextLineHeight * 1.5f},
+                TextLineHeight * 0.7f, TextMutedColor, Gfx::align_Left, Gfx::align_Center, publisher.c_str());
             Gfx::PopScissor();
 
             if (selected)
@@ -471,8 +494,10 @@ static void DoPause(BoxGui::Frame& mainFrame)
         float textX = pad + iconSize + 20.f;
         Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 4.f}, TextLineHeight * 0.7f, AccentColor,
             Gfx::align_Left, Gfx::align_Center, "PAUSED");
+        std::string name, publisher;
+        SplitTitle(meta.Title(ROMMetaDatabase::TitleLanguage), name, publisher);
         Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 40.f}, TextLineHeight * 1.4f, TextColor,
-            Gfx::align_Left, Gfx::align_Center, meta.Title(ROMMetaDatabase::TitleLanguage));
+            Gfx::align_Left, Gfx::align_Center, name.c_str());
         vskewer.Advance(28.f);
     }
 
