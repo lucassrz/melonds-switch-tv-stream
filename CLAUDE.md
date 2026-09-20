@@ -52,6 +52,15 @@ tools/         stream_receiver.py : récepteur de test sur le Mac (venv dans too
 - `src/frontend/switch/Stream.cpp/.h` : module de streaming. `PlatformConfig`,
   `SettingsDialog`, `main.cpp` : réglages, section de menu, hook par frame, overlay.
 - `src/frontend/switch/stb_image/stb_image_write.h` : encodeur JPEG (domaine public).
+- **Interface refaite (20 septembre 2026)** : `Style.h` (palette sombre, métriques), shaders
+  `Default_*sh.glsl` (coins arrondis/contours par SDF, attributs Local+Shape dans `Vertex`),
+  `Gfx` (`DrawRectangle` prend `radius`/`border`, helpers `DrawRoundedRect`/`Outline`/`Circle`),
+  `BoxGui` (tactile : `SetTouch` alimenté par `main.cpp`, tap = sélection + A injecté,
+  drag = scroll ; `AltPressed` = X ; une sélection forcée survit au changement d'écran),
+  `StartMenu.cpp` réécrit (sidebar, carte "continue playing", grille de la bibliothèque
+  scannée dans `LastROMFolder`, pause), widgets de `SettingsDialog.cpp`, `Filebrowser`,
+  `BackButton`, `KeyExplanations`, `ErrorDialog`. Maquette de référence :
+  https://claude.ai/artifact/FuvvPJMnjmQr4JsvugtU7j
 
 ## Format réseau (à respecter dans le client TV)
 UDP, un datagramme = en-tête de 20 octets little endian puis jusqu'à 1400 octets d'image :
