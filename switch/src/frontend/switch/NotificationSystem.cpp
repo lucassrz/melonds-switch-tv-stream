@@ -96,7 +96,7 @@ void Notification::Render() {
                 break;
         }
 
-        Gfx::DrawRectangle(boxPos, boxSize, WidgetColorBright, true);
+        Gfx::DrawRectangle(boxPos, boxSize, CardColor, true);
 
         Gfx::Vector2f localTextOffset = {
             padding + avatarSize + spacing,
@@ -135,11 +135,11 @@ void Notification::Render() {
             Gfx::Vector2f avatarPos = boxPos + Gfx::Vector2f{padding, (rectHeight - avatarSize) / 2.f};
             Gfx::Vector2f avatarDrawSize = {avatarSize, avatarSize};
             Gfx::DrawRectangle(notif.textureId, avatarPos, avatarDrawSize,
-                               {0.f, 0.f}, {static_cast<float>(notif.nwidth), static_cast<float>(notif.nheight)}, WidgetColorBright);
+                               {0.f, 0.f}, {static_cast<float>(notif.nwidth), static_cast<float>(notif.nheight)}, Gfx::Color{1.f, 1.f, 1.f, 1.f});
         }
 
         if (!notif.message.empty()) {
-            Gfx::DrawText(Gfx::SystemFontStandard, rotatedTextOffset, TextLineHeight, DarkColor,
+            Gfx::DrawText(Gfx::SystemFontStandard, rotatedTextOffset, TextLineHeight, TextColor,
                           Gfx::align_Left, Gfx::align_Center, notif.message.c_str());
         }
     }

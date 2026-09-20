@@ -12,6 +12,7 @@
 #include "InputConfig.h"
 
 #include <string.h>
+#include <stdio.h>
 
 #include "RetroAchievements.h"
 #include "NotificationSystem.h"
@@ -32,105 +33,136 @@ const char* ComboboxElementPrefix = "settings_combobox";
 
 const int MaxDiscoveredOptions = 8;
 
+// ---- row helpers -------------------------------------------------------------
+
+static BoxGui::Frame MakeRow(BoxGui::Frame& parent, BoxGui::Skewer& skewer)
+{
+    return BoxGui::Frame{parent, skewer.Spit({parent.Area.Size.X, UIRowHeight + UIRowGap}, Gfx::align_Right),
+        {0.f, UIRowGap / 2.f}, {0.f, UIRowGap / 2.f}};
+}
+
+static void DrawRowChrome(BoxGui::Frame& row, bool selected)
+{
+    if (!selected)
+        return;
+    Gfx::DrawRoundedRect(row.Area.Position, row.Area.Size, RaisedColor, UIRadius);
+    Gfx::DrawRoundedOutline(row.Area.Position, row.Area.Size, AccentColor, UIRadius, 2.f);
+}
+
+static void DrawRowLabel(BoxGui::Frame& row, const char* name)
+{
+    Gfx::DrawText(Gfx::SystemFontStandard, row.Area.Position + Gfx::Vector2f{16.f, row.Area.Size.Y / 2.f},
+        TextLineHeight, TextColor, Gfx::align_Left, Gfx::align_Center, name);
+}
+
+static Gfx::Vector2f RowRight(BoxGui::Frame& row, float inset = 16.f)
+{
+    return row.Area.Position + Gfx::Vector2f{row.Area.Size.X - inset, row.Area.Size.Y / 2.f};
+}
+
+static void DrawToggle(Gfx::Vector2f rightCenter, bool on)
+{
+    const float w = 44.f, h = 26.f;
+    Gfx::Vector2f pos = rightCenter - Gfx::Vector2f{w, h / 2.f};
+    Gfx::DrawRoundedRect(pos, {w, h}, on ? AccentColor : LineColor, h / 2.f);
+    Gfx::DrawCircle(pos + Gfx::Vector2f{on ? w - h / 2.f : h / 2.f, h / 2.f}, 10.f, on ? BgColor : TextMutedColor);
+    Gfx::DrawText(Gfx::SystemFontStandard, pos - Gfx::Vector2f{12.f, -h / 2.f}, TextLineHeight * 0.8f, TextMutedColor,
+        Gfx::align_Right, Gfx::align_Center, on ? "On" : "Off");
+}
+
+static int CountOptions(const char* options)
+{
+    int n = 0;
+    while (*options)
+    {
+        n++;
+        options += strlen(options) + 1;
+    }
+    return n;
+}
+
+static const char* OptionName(const char* options, int index)
+{
+    for (int i = 0; i < index; i++)
+    {
+        options += strlen(options) + 1;
+        if (*options == '\0')
+            return "?";
+    }
+    return options;
+}
+
+// Dark overlay plus a centered card; returns the card frame area.
+static BoxGui::Rect ModalCard(BoxGui::Frame& rootFrame, double startTimestamp, float height)
+{
+    Gfx::Color color = OverlayColor;
+    color.A = (float)std::min((Gfx::AnimationTimestamp - startTimestamp) * 5.0, 0.8);
+    Gfx::DrawRectangle(rootFrame.Area.Position, rootFrame.Area.Size, color);
+    Gfx::Vector2f size = {std::min(rootFrame.Area.Size.X * 0.9f, 720.f), std::min(rootFrame.Area.Size.Y * 0.9f, height)};
+    BoxGui::Rect rect = rootFrame.Area.CenteredChild(size);
+    Gfx::DrawRoundedRect(rect.Position, rect.Size, CardColor, UIRadiusLarge);
+    Gfx::DrawRoundedOutline(rect.Position, rect.Size, BorderColor, UIRadiusLarge, 1.f);
+    return rect;
+}
+
+// ---- widgets -----------------------------------------------------------------
+
 void DoSlider(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name, int& value, int low, int high, bool first = false)
 {
-    BoxGui::Frame settingFrame{parent, skewer.Spit({parent.Area.Size.X, UIRowHeight}, Gfx::align_Right),
-        {5.f, 5.f}, {5.f, 5.f}};
+    BoxGui::Frame row = MakeRow(parent, skewer);
+    bool selected = BoxGui::InputElement(row, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(name, 0)), first);
 
-    bool selected = BoxGui::InputElement(settingFrame, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(name, 0)));
     if (selected && BoxGui::LeftPressed())
-    {
-        value--;
-        if (value < low)
-            value = low;
-    }
+        value = std::max(value - 1, low);
     if (selected && BoxGui::RightPressed())
-    {
-        value++;
-        if (value > high)
-            value = high;
-    }
+        value = std::min(value + 1, high);
 
-    // a bit wasteful
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
+    DrawRowChrome(row, selected);
+    DrawRowLabel(row, name);
 
-    if (selected)
-        Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
-
-    BoxGui::Skewer settingSkewer{settingFrame, settingFrame.Area.Size.Y/2.f, BoxGui::direction_Horizontal};
-
-    settingSkewer.AlignLeft(15.f);
-    BoxGui::Frame nameFrame{settingFrame, settingSkewer.Spit({settingFrame.Area.Size.X*0.8f, TextLineHeight})};
-    Gfx::DrawText(Gfx::SystemFontStandard, nameFrame.Area.Position, TextLineHeight, DarkColor, "%s", name);
-
-    settingSkewer.AlignRight(20.f);
-    BoxGui::Frame valueFrame{settingFrame, settingSkewer.Spit({30.f, TextLineHeight})};
-    Gfx::DrawText(Gfx::SystemFontStandard, valueFrame.Area.Position, TextLineHeight, DarkColor, "%d", value);
-
-    settingSkewer.Advance(15.f);
-
-    BoxGui::Frame bar{settingFrame, settingSkewer.Spit({150.f, 5.f})};
-    Gfx::DrawRectangle(bar.Area.Position, bar.Area.Size, DarkColor);
-
-    Gfx::DrawRectangle(bar.Area.Position + Gfx::Vector2f({(float)(value - low) / (high - low + 1) * bar.Area.Size.X, bar.Area.Size.Y/2.f-TextLineHeight/2.f}), {10.f, TextLineHeight}, DarkColor);
-
-    if (!first)
-    {
-        Gfx::DrawRectangle(settingFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-            {settingFrame.Area.Size.X - 2*10.f, 2.f},
-            SeparatorColor);
-    }
+    const float trackWidth = 180.f, trackHeight = 6.f;
+    Gfx::Vector2f right = RowRight(row);
+    char valueText[16];
+    snprintf(valueText, sizeof(valueText), "%d", value);
+    Gfx::DrawText(Gfx::SystemFontStandard, right, TextLineHeight, TextSoftColor, Gfx::align_Right, Gfx::align_Center, valueText);
+    Gfx::Vector2f trackPos = right - Gfx::Vector2f{56.f + trackWidth, trackHeight / 2.f};
+    float ratio = (float)(value - low) / (float)std::max(high - low, 1);
+    Gfx::DrawRoundedRect(trackPos, {trackWidth, trackHeight}, LineColor, trackHeight / 2.f);
+    Gfx::DrawRoundedRect(trackPos, {std::max(trackWidth * ratio, trackHeight), trackHeight}, AccentColor, trackHeight / 2.f);
+    Gfx::DrawCircle(trackPos + Gfx::Vector2f{trackWidth * ratio, trackHeight / 2.f}, 9.f, selected ? TextColor : TextSoftColor);
 }
 
 void DoCheckbox(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name, bool& value, bool first = false)
 {
-    BoxGui::Frame settingFrame{parent, skewer.Spit({parent.Area.Size.X, UIRowHeight}, Gfx::align_Right),
-        {5.f, 5.f}, {5.f, 5.f}};
+    BoxGui::Frame row = MakeRow(parent, skewer);
+    bool selected = BoxGui::InputElement(row, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(name, 0)), first);
 
-    bool selected = BoxGui::InputElement(settingFrame, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(name, 0)));
     if (selected && BoxGui::ConfirmPressed())
-    {
         value ^= true;
-    }
     if (selected)
-    {
         KeyExplanation::Explain(KeyExplanation::button_A, "Toggle");
-    }
 
-    // a bit wasteful
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
-
-    if (selected)
-        Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
-
-    BoxGui::Skewer settingSkewer{settingFrame, settingFrame.Area.Size.Y/2.f, BoxGui::direction_Horizontal};
-
-    settingSkewer.AlignLeft(15.f);
-    BoxGui::Frame nameFrame{settingFrame, settingSkewer.Spit({settingFrame.Area.Size.X*0.8f, TextLineHeight})};
-    Gfx::DrawText(Gfx::SystemFontStandard, nameFrame.Area.Position, TextLineHeight, DarkColor, "%s", name);
-
-    settingSkewer.AlignRight(25.f);
-    BoxGui::Frame checkMarkFrame{settingFrame, settingSkewer.Spit({TextLineHeight, TextLineHeight})};
-
-    Gfx::DrawText(Gfx::SystemFontNintendoExt,
-        checkMarkFrame.Area.Position, TextLineHeight,
-        DarkColor,
-        value ? GFX_NINTENDOFONT_CHECKMARK : GFX_NINTENDOFONT_CROSS);
-
-    if (!first)
-    {
-        Gfx::DrawRectangle(settingFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-            {settingFrame.Area.Size.X - 2*10.f, 2.f},
-            SeparatorColor);
-    }
+    DrawRowChrome(row, selected);
+    DrawRowLabel(row, name);
+    DrawToggle(RowRight(row), value);
 }
 
 void DoCombobox(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name, const char* options, int& selectedOption, bool first = false)
 {
-    BoxGui::Frame settingFrame{parent, skewer.Spit({parent.Area.Size.X, UIRowHeight}, Gfx::align_Right),
-        {5.f, 5.f}, {5.f, 5.f}};
+    BoxGui::Frame row = MakeRow(parent, skewer);
+    bool selected = BoxGui::InputElement(row, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(name, 0)), first);
 
-    bool selected = BoxGui::InputElement(settingFrame, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(name, 0)));
+    int count = CountOptions(options);
+    if (count == 0)
+        return;
+    if (selectedOption >= count || selectedOption < 0)
+        selectedOption = 0;
+
+    if (selected && BoxGui::LeftPressed())
+        selectedOption = (selectedOption + count - 1) % count;
+    if (selected && BoxGui::RightPressed())
+        selectedOption = (selectedOption + 1) % count;
+
     if (selected && BoxGui::ConfirmPressed())
     {
         struct Dialog
@@ -143,146 +175,96 @@ void DoCombobox(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name,
 
             bool operator()(BoxGui::Frame& rootFrame)
             {
-                Gfx::Color color = DarkColor;
-                // fade in
-                color.A = (float)std::min((Gfx::AnimationTimestamp - StartTimestamp) * 5.0, 0.8);
-                Gfx::DrawRectangle(rootFrame.Area.Position, rootFrame.Area.Size, color);
+                const float pad = 24.f, titleHeight = 56.f;
+                int count = CountOptions(Options);
+                BoxGui::Rect card = ModalCard(rootFrame, StartTimestamp, pad + titleHeight + count * (UIRowHeight + UIRowGap) + pad);
+                BoxGui::Frame dialogFrame{rootFrame, card};
 
-                Gfx::Vector2f Size = rootFrame.Area.Size * 0.9f;
-                Size.X = std::min(Size.X, 720.f);
-                BoxGui::Frame dialogFrame{rootFrame, rootFrame.Area.CenteredChild(Size)};
+                Gfx::DrawText(Gfx::SystemFontStandard, dialogFrame.Area.Position + Gfx::Vector2f{pad + 16.f, pad + titleHeight / 2.f},
+                    TextLineHeight * 1.4f, TextColor, Gfx::align_Left, Gfx::align_Center, Name);
 
-                Gfx::DrawRectangle(dialogFrame.Area.Position, dialogFrame.Area.Size, WidgetColorBright, true);
+                BoxGui::Frame optionsFrame{dialogFrame,
+                    {{pad, pad + titleHeight}, {dialogFrame.Area.Size.X - 2.f * pad, dialogFrame.Area.Size.Y - 2.f * pad - titleHeight}},
+                    {0.f, 0.f}, {0.f, 0.f},
+                    BoxGui::direction_Vertical, BoxGui::MakeUniqueName(ComboboxElementPrefix, -1), false, true};
+                Gfx::PushScissor(optionsFrame.Area.Position.X, optionsFrame.Area.Position.Y, optionsFrame.Area.Size.X, optionsFrame.Area.Size.Y);
+                BoxGui::Skewer optionsSkewer{optionsFrame, 0.f, BoxGui::direction_Vertical};
 
-                BoxGui::Skewer optionsSkewer{dialogFrame, 0.f, BoxGui::direction_Vertical};
-                optionsSkewer.AlignLeft(30.f);
-                BoxGui::Frame titleFrame{dialogFrame, optionsSkewer.Spit({dialogFrame.Area.Size.X, TextLineHeight * 2.f}, Gfx::align_Right), {5.f, 5.f}, {5.f, 5.f}};
-                Gfx::DrawText(Gfx::SystemFontStandard, titleFrame.Area.Position + Gfx::Vector2f{15.f, 0.f}, TextLineHeight * 2.f, DarkColor,
-                    Gfx::align_Left, Gfx::align_Left, Name);
-                optionsSkewer.Advance(10.f);
-
-                const char* curOption = Options;
-                int i = 0;
-                while (true)
+                for (int i = 0; i < count; i++)
                 {
-                    BoxGui::Frame optionFrame{dialogFrame,
-                        optionsSkewer.Spit({dialogFrame.Area.Size.X, UIRowHeight}, Gfx::align_Right), {5.f, 5.f}, {5.f, 5.f}};
-
-                    bool selected = BoxGui::InputElement(optionFrame, BoxGui::MakeUniqueName(ComboboxElementPrefix, i));
-                    
-                    if (selected && BoxGui::ConfirmPressed() && EndTimestamp < 0.0)
+                    BoxGui::Frame optionFrame = MakeRow(optionsFrame, optionsSkewer);
+                    bool optionSelected = BoxGui::InputElement(optionFrame, BoxGui::MakeUniqueName(ComboboxElementPrefix, i));
+                    if (optionSelected && BoxGui::ConfirmPressed() && EndTimestamp < 0.0)
                     {
                         SelectedOption = i;
-                        if (SelectedOption != OriginalValue)
-                            EndTimestamp = Gfx::AnimationTimestamp;
-                        else
-                            EndTimestamp = 0.f;
-                    } 
-                    if (selected)
-                        Gfx::DrawRectangle(optionFrame.Area.Position, optionFrame.Area.Size, WidgetColorVibrant);
-
-                    BoxGui::Skewer optionSkewer{optionFrame, optionFrame.Area.Size.Y/2.f, BoxGui::direction_Horizontal};
+                        EndTimestamp = SelectedOption != OriginalValue ? Gfx::AnimationTimestamp : 0.0;
+                    }
+                    if (!optionFrame.IsVisible())
+                        continue;
+                    DrawRowChrome(optionFrame, optionSelected);
                     if (SelectedOption == i)
-                    {
-                        optionSkewer.AlignLeft(20.f);
-                        Gfx::DrawText(Gfx::SystemFontNintendoExt, optionSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-                            Gfx::align_Left, Gfx::align_Center, GFX_NINTENDOFONT_CHECKMARK);
-
+                        Gfx::DrawText(Gfx::SystemFontNintendoExt, optionFrame.Area.Position + Gfx::Vector2f{16.f, optionFrame.Area.Size.Y / 2.f},
+                            TextLineHeight, AccentColor, Gfx::align_Left, Gfx::align_Center, GFX_NINTENDOFONT_CHECKMARK);
+                    Gfx::DrawText(Gfx::SystemFontStandard, optionFrame.Area.Position + Gfx::Vector2f{48.f, optionFrame.Area.Size.Y / 2.f},
+                        TextLineHeight, TextColor, Gfx::align_Left, Gfx::align_Center, OptionName(Options, i));
+                    if (optionSelected)
                         KeyExplanation::Explain(KeyExplanation::button_A, "Choose");
-                    }
-                    optionSkewer.AlignLeft(50.f);
-
-                    Gfx::DrawText(Gfx::SystemFontStandard, optionSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-                        Gfx::align_Left, Gfx::align_Center, curOption);
-
-                    if (i > 0)
-                    {
-                        Gfx::DrawRectangle(optionFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-                            {optionFrame.Area.Size.X - 2*10.f, 2.f},
-                            SeparatorColor);
-                    }
-
-                    i++;
-                    curOption += strlen(curOption) + 1; // skip the \0
-                    if (*curOption == '\0')
-                        break;
                 }
-
-                if (SelectedOption >= i)
-                    SelectedOption = 0;
+                Gfx::PopScissor();
 
                 KeyExplanation::Explain(KeyExplanation::button_B, "Cancel");
-
-                const double fadeoutLength = 0.25;
                 if (BoxGui::CancelPressed())
-                {
-                    EndTimestamp = 0.f;
-                }
-
+                    EndTimestamp = 0.0;
                 KeyExplanation::DoGui(rootFrame);
 
                 // don't close the dialog immediately
                 // instead wait a moment so the user can reflect on their choice :D
+                const double fadeoutLength = 0.25;
                 return EndTimestamp < 0.0 || Gfx::AnimationTimestamp - EndTimestamp < fadeoutLength;
             }
         };
-
         BoxGui::OpenModalDialog(Dialog{selectedOption, selectedOption, name, options, Gfx::AnimationTimestamp});
         BoxGui::ForceSelecton(BoxGui::MakeUniqueName(ComboboxElementPrefix, selectedOption), true, 1);
     }
+
     if (selected)
-    {
         KeyExplanation::Explain(KeyExplanation::button_A, "Choose");
-    }
 
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
+    DrawRowChrome(row, selected);
+    DrawRowLabel(row, name);
+
+    Gfx::Vector2f right = RowRight(row);
     if (selected)
-        Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
-
-    BoxGui::Skewer settingSkewer{settingFrame, settingFrame.Area.Size.Y/2.f, BoxGui::direction_Horizontal};
-
-    settingSkewer.AlignLeft(20.f);
-    Gfx::DrawText(Gfx::SystemFontStandard, settingSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-        Gfx::align_Left, Gfx::align_Center, name);
-
-    const char* selectedOptionName = options;
-    for (u32 i = 0; i < selectedOption; i++)
     {
-        selectedOptionName += strlen(selectedOptionName) + 1;
-        if (*selectedOptionName == '\0')
-        {
-            selectedOptionName = "Error!!!";
-            break;
-        }
+        Gfx::DrawText(Gfx::SystemFontStandard, right, TextLineHeight, TextMutedColor, Gfx::align_Right, Gfx::align_Center, ">");
+        Gfx::Vector2f valueSize = Gfx::MeasureText(Gfx::SystemFontStandard, TextLineHeight, OptionName(options, selectedOption));
+        Gfx::DrawText(Gfx::SystemFontStandard, right - Gfx::Vector2f{18.f, 0.f}, TextLineHeight, TextColor,
+            Gfx::align_Right, Gfx::align_Center, OptionName(options, selectedOption));
+        Gfx::DrawText(Gfx::SystemFontStandard, right - Gfx::Vector2f{18.f + valueSize.X + 8.f, 0.f}, TextLineHeight, TextMutedColor,
+            Gfx::align_Right, Gfx::align_Center, "<");
     }
-    settingSkewer.AlignRight(20.f);
-    Gfx::DrawText(Gfx::SystemFontStandard, settingSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-        Gfx::align_Right, Gfx::align_Center, selectedOptionName);
-
-    if (!first)
+    else
     {
-        Gfx::DrawRectangle(settingFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-            {settingFrame.Area.Size.X - 2*10.f, 2.f},
-            SeparatorColor);
+        Gfx::DrawText(Gfx::SystemFontStandard, right, TextLineHeight, TextSoftColor,
+            Gfx::align_Right, Gfx::align_Center, OptionName(options, selectedOption));
     }
 }
 
 void SectionHeader(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name)
 {
-    const float height = TextLineHeight * 2.f;
-    skewer.Advance(height);
-    BoxGui::Frame nameFrame{parent, skewer.Spit({parent.Area.Size.X * 0.6f, height}, Gfx::align_Right), {5.f, 0.f}, {5.f, 15.f}};
-
-    Gfx::DrawRectangle(nameFrame.Area.Position - Gfx::Vector2f{0.f, 15.f}, nameFrame.Area.Size + Gfx::Vector2f{0.f, 15.f*2.f}, WidgetColorBright, true);
-    Gfx::DrawText(Gfx::SystemFontStandard, nameFrame.Area.Position + Gfx::Vector2f{10.f, 0.f}, height, DarkColor, "%s", name);
+    skewer.Advance(22.f);
+    BoxGui::Frame nameFrame{parent, skewer.Spit({parent.Area.Size.X, 30.f}, Gfx::align_Right)};
+    Gfx::DrawText(Gfx::SystemFontStandard, nameFrame.Area.Position + Gfx::Vector2f{16.f, 12.f}, TextLineHeight * 0.75f, TextMutedColor,
+        Gfx::align_Left, Gfx::align_Center, name);
+    Gfx::DrawRectangle(nameFrame.Area.Position + Gfx::Vector2f{0.f, 29.f}, {nameFrame.Area.Size.X, 1.f}, BorderColor);
+    skewer.Advance(6.f);
 }
 
 void DoTextField(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* label, char* buffer, size_t bufferSize, bool first = false)
 {
-    BoxGui::Frame settingFrame{parent, skewer.Spit({parent.Area.Size.X, UIRowHeight}, Gfx::align_Right),
-        {5.f, 5.f}, {5.f, 5.f}};
+    BoxGui::Frame row = MakeRow(parent, skewer);
+    bool selected = BoxGui::InputElement(row, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(label, 0)), first);
 
-    bool selected = BoxGui::InputElement(settingFrame, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(label, 0)));
     if (selected && BoxGui::ConfirmPressed())
     {
         SwkbdConfig kbd;
@@ -291,7 +273,7 @@ void DoTextField(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* labe
             swkbdConfigMakePresetDefault(&kbd);
             swkbdConfigSetInitialText(&kbd, buffer);
             swkbdConfigSetTextCheckCallback(&kbd, NULL);
-    
+
             char out[bufferSize];
             rc = swkbdShow(&kbd, out, bufferSize);
             if (R_SUCCEEDED(rc)) {
@@ -301,70 +283,22 @@ void DoTextField(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* labe
             swkbdClose(&kbd);
         }
     }
-
     if (selected)
-    {
         KeyExplanation::Explain(KeyExplanation::button_A, "Edit");
-    }
 
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
-    if (selected)
-        Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
-
-    BoxGui::Skewer settingSkewer{settingFrame, settingFrame.Area.Size.Y/2.f, BoxGui::direction_Horizontal};
-
-    settingSkewer.AlignLeft(20.f);
-    Gfx::DrawText(Gfx::SystemFontStandard, settingSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-        Gfx::align_Left, Gfx::align_Center, label);
-
-    settingSkewer.AlignRight(20.f);
-    Gfx::DrawText(Gfx::SystemFontStandard, settingSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-        Gfx::align_Right, Gfx::align_Center, buffer);
-
-    if (!first)
-    {
-        Gfx::DrawRectangle(settingFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-            {settingFrame.Area.Size.X - 2*10.f, 2.f},
-            SeparatorColor);
-    }
+    DrawRowChrome(row, selected);
+    DrawRowLabel(row, label);
+    Gfx::DrawText(Gfx::SystemFontStandard, RowRight(row), TextLineHeight, buffer[0] ? TextSoftColor : TextMutedColor,
+        Gfx::align_Right, Gfx::align_Center, buffer[0] ? buffer : "Tap to enter");
 }
 
 void DoLabel(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* text, bool first = false)
 {
-    BoxGui::Frame settingFrame{
-        parent,
-        skewer.Spit({parent.Area.Size.X, UIRowHeight}, Gfx::align_Right),
-        {5.f, 5.f},
-        {5.f, 5.f}
-    };
-
-    bool selected = BoxGui::InputElement(settingFrame, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(text, 0)));
-
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f},
-                       settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f * 2.f},
-                       WidgetColorBright, true);
-
-    if (selected)
-        Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
-               
-
-    BoxGui::Skewer settingSkewer{settingFrame, settingFrame.Area.Size.Y / 2.f, BoxGui::direction_Horizontal};
-
-    settingSkewer.AlignLeft(20.f);
-    Gfx::DrawText(Gfx::SystemFontStandard,
-                  settingSkewer.CurrentPosition(),
-                  TextLineHeight,
-                  DarkColor,
-                  Gfx::align_Left,
-                  Gfx::align_Center,
-                  text);
-
-    if (!first)
-    {
-        Gfx::DrawRectangle(settingFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-                           {settingFrame.Area.Size.X - 2 * 10.f, 2.f},
-                           SeparatorColor);
-    }
+    BoxGui::Frame row = MakeRow(parent, skewer);
+    bool selected = BoxGui::InputElement(row, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(text, 0)), first);
+    DrawRowChrome(row, selected);
+    Gfx::DrawText(Gfx::SystemFontStandard, row.Area.Position + Gfx::Vector2f{16.f, row.Area.Size.Y / 2.f},
+        TextLineHeight, TextSoftColor, Gfx::align_Left, Gfx::align_Center, text);
 }
 
 const char* ButtonToString(u64 buttons)
@@ -524,10 +458,9 @@ const char* ButtonToString(u64 buttons)
 
 void DoInputButton(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name, u64& mappedKey, bool first = false)
 {
-    BoxGui::Frame settingFrame{parent, skewer.Spit({parent.Area.Size.X, UIRowHeight}, Gfx::align_Right),
-        {5.f, 5.f}, {5.f, 5.f}};
+    BoxGui::Frame row = MakeRow(parent, skewer);
+    bool selected = BoxGui::InputElement(row, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(name, 0)), first);
 
-    bool selected = BoxGui::InputElement(settingFrame, BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName(name, 0)));
     if (selected && BoxGui::ConfirmPressed())
     {
         struct Dialog
@@ -540,30 +473,16 @@ void DoInputButton(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* na
 
             bool operator()(BoxGui::Frame& rootFrame)
             {
-                Gfx::Color color = DarkColor;
-                color.A = (float)std::min((Gfx::AnimationTimestamp - StartTimestamp) * 5.0, 0.8);
-                Gfx::DrawRectangle(rootFrame.Area.Position, rootFrame.Area.Size, color);
-
-                Gfx::Vector2f Size = rootFrame.Area.Size * 0.9f;
-                Size.X = std::min(Size.X, 720.f);
-                BoxGui::Frame dialogFrame{rootFrame, rootFrame.Area.CenteredChild(Size)};
-                Gfx::DrawRectangle(dialogFrame.Area.Position, dialogFrame.Area.Size, WidgetColorBright, true);
-
-                BoxGui::Skewer dialogSkewer{dialogFrame, 0.f, BoxGui::direction_Vertical};
-                dialogSkewer.AlignLeft(30.f);
-
-                BoxGui::Frame titleFrame{dialogFrame, dialogSkewer.Spit({dialogFrame.Area.Size.X, TextLineHeight * 2.f}, Gfx::align_Right), {5.f, 5.f}, {5.f, 5.f}};
-                Gfx::DrawText(Gfx::SystemFontStandard, titleFrame.Area.Position + Gfx::Vector2f{15.f, 0.f}, TextLineHeight * 2.f, DarkColor,
-                    Gfx::align_Left, Gfx::align_Left, Name);
-
-                dialogSkewer.Advance(10.f);
-
-                BoxGui::Frame msgFrame{dialogFrame, dialogSkewer.Spit({dialogFrame.Area.Size.X, TextLineHeight * 2.f}, Gfx::align_Right), {5.f, 5.f}, {5.f, 5.f}};
-                Gfx::DrawText(Gfx::SystemFontStandard, msgFrame.Area.Position + Gfx::Vector2f{15.f, 0.f}, TextLineHeight * 1.5f, DarkColor,
-                    Gfx::align_Left, Gfx::align_Left, "Waiting for input...");
+                const float pad = 28.f;
+                BoxGui::Rect card = ModalCard(rootFrame, StartTimestamp, 200.f);
+                Gfx::DrawText(Gfx::SystemFontStandard, card.Position + Gfx::Vector2f{pad, pad + 14.f},
+                    TextLineHeight * 1.4f, TextColor, Gfx::align_Left, Gfx::align_Center, Name);
+                Gfx::DrawText(Gfx::SystemFontStandard, card.Position + Gfx::Vector2f{pad, pad + 64.f},
+                    TextLineHeight, TextSoftColor, Gfx::align_Left, Gfx::align_Center, "Press the button to map...");
+                Gfx::DrawText(Gfx::SystemFontStandard, card.Position + Gfx::Vector2f{pad, pad + 94.f},
+                    TextLineHeight * 0.85f, TextMutedColor, Gfx::align_Left, Gfx::align_Center, "Waits 10 seconds, B cancels.");
 
                 const double elapsedInput = Gfx::AnimationTimestamp - StartTimestamp;
-
                 if (!inputCaptured && elapsedInput > 0.3)
                 {
                     static PadState pad;
@@ -593,67 +512,32 @@ void DoInputButton(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* na
                 return EndTimestamp < 0.0 || Gfx::AnimationTimestamp - EndTimestamp < fadeoutLength;
             }
         };
-
         BoxGui::OpenModalDialog(Dialog{name, mappedKey, Gfx::AnimationTimestamp});
     }
-
     if (selected)
-    {
         KeyExplanation::Explain(KeyExplanation::button_A, "Remap");
-    }
 
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
-    if (selected)
-        Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
-
-    BoxGui::Skewer settingSkewer{settingFrame, settingFrame.Area.Size.Y / 2.f, BoxGui::direction_Horizontal};
-
-    settingSkewer.AlignLeft(20.f);
-    Gfx::DrawText(Gfx::SystemFontStandard, settingSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-        Gfx::align_Left, Gfx::align_Center, name);
-
-    const char* keyName = ButtonToString(mappedKey);
-    settingSkewer.AlignRight(20.f);
-    Gfx::DrawText(Gfx::SystemFontStandard, settingSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-        Gfx::align_Right, Gfx::align_Center, keyName);
-
-    if (!first)
-    {
-        Gfx::DrawRectangle(settingFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-            {settingFrame.Area.Size.X - 2*10.f, 2.f},
-            SeparatorColor);
-    }
+    DrawRowChrome(row, selected);
+    DrawRowLabel(row, name);
+    Gfx::DrawText(Gfx::SystemFontStandard, RowRight(row), TextLineHeight, TextSoftColor,
+        Gfx::align_Right, Gfx::align_Center, ButtonToString(mappedKey));
 }
 
 void ShowImage(BoxGui::Frame& parent, BoxGui::Skewer& skewer, int textureId, int nwidth, int nheight, float imageSize = 64.f)
 {
     if (textureId < 0 || nwidth <= 0 || nheight <= 0)
         return;
-
-    BoxGui::Frame settingFrame{
-        parent,
-        skewer.Spit({parent.Area.Size.X, imageSize + 10.f}, Gfx::align_Right),
-        {5.f, 5.f},
-        {5.f, 5.f}
-    };
-
-    BoxGui::Skewer settingSkewer{settingFrame, settingFrame.Area.Size.Y / 2.f, BoxGui::direction_Horizontal};
-    settingSkewer.AlignLeft(20.f);
-
-    Gfx::Vector2f avatarPos = settingSkewer.CurrentPosition();
-    Gfx::Vector2f avatarDrawSize = {imageSize, imageSize};
-
-    Gfx::DrawRectangle(textureId, avatarPos, avatarDrawSize,
-                       {0.f, 0.f},
-                       {static_cast<float>(nwidth), static_cast<float>(nheight)},
-                       WidgetColorBright);
+    BoxGui::Frame row{parent, skewer.Spit({parent.Area.Size.X, imageSize + 10.f}, Gfx::align_Right), {0.f, 5.f}, {0.f, 5.f}};
+    Gfx::DrawRectangle(textureId, row.Area.Position + Gfx::Vector2f{16.f, 0.f}, {imageSize, imageSize},
+        {0.f, 0.f}, {static_cast<float>(nwidth), static_cast<float>(nheight)},
+        Gfx::Color{1.f, 1.f, 1.f, 1.f}, false, 8.f);
 }
 
 void DoGui(BoxGui::Frame& parent)
 {
     BoxGui::Frame settingsFrame{parent,
         {{0.f, BackButtonHeight}, {parent.Area.Size.X, parent.Area.Size.Y - BackButtonHeight}},
-        {0.f, 0.f}, {0.f, 0.f},
+        {UIPagePadding, 8.f}, {UIPagePadding, 0.f},
         BoxGui::direction_Vertical, BoxGui::MakeUniqueName(SettingsPrefix, -1), false, true};
 
     BoxGui::Skewer settingsSkewer{settingsFrame, 0.f, BoxGui::direction_Vertical};
@@ -664,7 +548,7 @@ void DoGui(BoxGui::Frame& parent)
     switch (CurrentUiScreen)
     {
     case uiScreen_EmulationSettings:
-        title = "Emulation settings";
+        title = "Emulation";
         {
             SectionHeader(settingsFrame, settingsSkewer, "General");
             DoCombobox(settingsFrame, settingsSkewer, "Console mode", "DS\0DSi (experimental)\0", Config::ConsoleType, true);
@@ -722,7 +606,7 @@ void DoGui(BoxGui::Frame& parent)
         }
         break;
     case uiScreen_DisplaySettings:
-        title = "Presentation settings";
+        title = "Display";
         {
             SectionHeader(settingsFrame, settingsSkewer, "Framerate");
             bool limitFramerate = Config::LimitFramerate;
@@ -760,6 +644,11 @@ void DoGui(BoxGui::Frame& parent)
             bool streamEnable = Config::StreamEnable;
             DoCheckbox(settingsFrame, settingsSkewer, "Stream top screen to a TV over wifi", streamEnable);
             Config::StreamEnable = streamEnable;
+            if (FocusStreamingSection)
+            {
+                BoxGui::ForceSelecton(BoxGui::MakeUniqueName(SettingsPrefix, BoxGui::MakeUniqueName("Stream top screen to a TV over wifi", 0)), true);
+                FocusStreamingSection = false;
+            }
             if (streamEnable)
             {
                 // list of receivers found on the network; the buffer must outlive
@@ -819,7 +708,7 @@ void DoGui(BoxGui::Frame& parent)
         Emulation::UpdateScreenLayout();
         break;
     case uiScreen_RetroAchievements:
-        title = "RetroAchievements List";
+        title = "Achievements";
         {    
             if (g_loadAchievements) {
                 g_achievements = achievements_list();   
@@ -840,7 +729,7 @@ void DoGui(BoxGui::Frame& parent)
         }
         break;
     case uiScreen_InputSettings:
-        title = "Input settings";
+        title = "Input";
 
         padUpdate(&pad);
         {

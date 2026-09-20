@@ -170,8 +170,17 @@ bool InputElement(Frame& frame, u64 uniqueName, bool first)
 
 bool SkipScrollAnimation = false;
 
+bool TouchIsDown = false, TouchWasDown = false, TouchDragging = false;
+bool PendingTap = false;         // a tap was released: inject an A press
+bool SuppressAutoScroll = false; // after a finger drag, don't snap back to the selection
+Gfx::Vector2f TouchPos, TouchStartPos, TouchLastPos;
+u64 TouchStartElement = UINT64_MAX;
+u64 TouchScrollId = UINT64_MAX;
+
+
 void ForceSelecton(u64 uniqueName, bool skipAnimation, int level)
 {
+    SuppressAutoScroll = false;
     NextSelection[level != - 1 ? level : ModalLevel()] = uniqueName;
     SkipScrollAnimation = skipAnimation;
 }
@@ -223,6 +232,11 @@ bool DetailsPressed()
     return KeysDown & HidNpadButton_Plus;
 }
 
+bool AltPressed()
+{
+    return KeysDown & HidNpadButton_X;
+}
+
 u32 DirectionsCaptured = 0;
 
 bool LeftPressed()
@@ -248,11 +262,99 @@ bool HasModalDialog()
     return CurrentModalDialog.has_value();
 }
 
+// ---- touch -----------------------------------------------------------------
+
+void SetTouch(bool down, Gfx::Vector2f position)
+{
+    TouchIsDown = down;
+    if (down)
+        TouchPos = position;
+}
+
+static bool RectContains(const Rect& r, Gfx::Vector2f p)
+{
+    return p.X >= r.Position.X && p.Y >= r.Position.Y
+        && p.X < r.Position.X + r.Size.X && p.Y < r.Position.Y + r.Size.Y;
+}
+
+// Runs after the GUI registered its elements for this frame.
+void ProcessTouch()
+{
+    int level = ModalLevel();
+    if (TouchIsDown && !TouchWasDown)
+    {
+        TouchStartPos = TouchLastPos = TouchPos;
+        TouchDragging = false;
+        TouchStartElement = UINT64_MAX;
+        TouchScrollId = UINT64_MAX;
+        // smallest element under the finger wins
+        float bestArea = INFINITY;
+        for (auto& it : InputFrames)
+        {
+            if (!RectContains(it.second.Area, TouchPos))
+                continue;
+            float area = it.second.Area.Size.X * it.second.Area.Size.Y;
+            if (area < bestArea)
+            {
+                bestArea = area;
+                TouchStartElement = it.first;
+            }
+        }
+        for (auto& it : ScrollFrames)
+        {
+            if (it.second.ModalLevel == level && RectContains(it.second.Area, TouchPos))
+                TouchScrollId = it.first;
+        }
+        if (TouchStartElement != UINT64_MAX)
+        {
+            NextSelection[level] = TouchStartElement;
+            SkipScrollAnimation = true;
+            SuppressAutoScroll = true; // the finger is already on it, no need to center it
+        }
+    }
+    else if (TouchIsDown && TouchWasDown)
+    {
+        Gfx::Vector2f delta = TouchPos - TouchLastPos;
+        if (!TouchDragging && (TouchPos - TouchStartPos).LengthSqr() > 12.f * 12.f)
+            TouchDragging = true;
+        if (TouchDragging && TouchScrollId != UINT64_MAX)
+        {
+            auto it = ScrollFrames.find(TouchScrollId);
+            if (it != ScrollFrames.end())
+            {
+                int axis = it->second.Axis;
+                it->second.Scroll = std::clamp(it->second.Scroll - delta.Components[axis],
+                    it->second.ScrollMin, it->second.ScrollMax);
+                ScrollTime = 0.f;
+                SuppressAutoScroll = true;
+            }
+        }
+        TouchLastPos = TouchPos;
+    }
+    else if (!TouchIsDown && TouchWasDown)
+    {
+        if (!TouchDragging && TouchStartElement != UINT64_MAX)
+        {
+            auto it = InputFrames.find(TouchStartElement);
+            if (it != InputFrames.end() && RectContains(it->second.Area, TouchLastPos))
+            {
+                NextSelection[level] = TouchStartElement;
+                PendingTap = true;
+            }
+        }
+        TouchStartElement = UINT64_MAX;
+        TouchScrollId = UINT64_MAX;
+    }
+    TouchWasDown = TouchIsDown;
+}
+
 void ResetSelection()
 {
-    if (InputFrames.count(CurrentSelections[ModalLevel()]) == 0)
+    // a forced selection (e.g. opening a page on a given row) wins over the default
+    if (InputFrames.count(CurrentSelections[ModalLevel()]) == 0 && NextSelection[ModalLevel()] == UINT64_MAX)
     {
         SkipScrollAnimation = true;
+        SuppressAutoScroll = false;
         NextSelection[ModalLevel()] = FirstElement;
     }
     FirstElement = UINT64_MAX;
@@ -261,6 +363,14 @@ void ResetSelection()
 void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
 {
     KeysDown = keysDown;
+    // a tap inside a modal dialog is delivered to it on the next frame (it reads
+    // the keys of the same Update call, unlike the regular GUI)
+    if (PendingTap && CurrentModalDialog)
+    {
+        KeysDown |= HidNpadButton_A;
+        keysDown |= HidNpadButton_A;
+        PendingTap = false;
+    }
     if (KeysToRepeat == 0)
     {
         KeyRepeatTime = 0.22f;
@@ -330,8 +440,11 @@ void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
     }
     DirectionsCaptured = 0;
 
+    ProcessTouch();
+
     if (axis != -1)
     {
+        SuppressAutoScroll = false;
         InputFrame currentInput = InputFrames[CurrentSelections[ModalLevel()]];
         for (int i = 0; i < 8; i++)
         {
@@ -446,7 +559,7 @@ void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
         InputFrame& curSelection = InputFrames[CurrentSelections[ModalLevel()]];
 
         auto it = ScrollFrames.find(curSelection.ParentScrollId);
-        if (it != ScrollFrames.end())
+        if (it != ScrollFrames.end() && !SuppressAutoScroll)
         {
             int axis = it->second.Axis;
 
@@ -523,6 +636,12 @@ void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
             CurrentSelections[i] = NextSelection[i];
             NextSelection[i] = UINT64_MAX;
         }
+    }
+    // the regular GUI reads the keys of the previous Update: deliver the tap now
+    if (PendingTap && !CurrentModalDialog)
+    {
+        KeysDown |= HidNpadButton_A;
+        PendingTap = false;
     }
 }
 

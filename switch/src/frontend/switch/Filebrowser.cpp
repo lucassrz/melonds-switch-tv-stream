@@ -76,6 +76,8 @@ void EnterDirectory(const char* path)
     }
 
     CurrentPath = path;
+    strncpy(Config::LastROMFolder, CurrentPath.c_str(), sizeof(Config::LastROMFolder) - 1);
+    Config::LastROMFolder[sizeof(Config::LastROMFolder) - 1] = '\0';
 
     CurrentEntryNames.clear();
     CurrentEntries.clear();
@@ -215,8 +217,8 @@ void DoGui(BoxGui::Frame& parent)
 {
     BackButton::DoGui(parent, CurrentPath.c_str());
 
-    BoxGui::Frame entriesFrame{parent, {{0.f, BackButtonHeight}, {parent.Area.Size.X, parent.Area.Size.Y-BackButtonHeight}},
-        {0.f, 0.f}, {0.f, 0.f},
+    BoxGui::Frame entriesFrame{parent, {{0.f, BackButtonHeight}, {parent.Area.Size.X, parent.Area.Size.Y - BackButtonHeight}},
+        {UIPagePadding, 8.f}, {UIPagePadding, 0.f},
         1, BoxGui::MakeUniqueName(FileBrowserPrefix, -1),
         false, true};
     BoxGui::Skewer entrySkewer{entriesFrame, 0.f, BoxGui::direction_Vertical};
@@ -228,56 +230,55 @@ void DoGui(BoxGui::Frame& parent)
     {
         Entry& entry = CurrentEntries[i];
 
-        BoxGui::Frame entryFrame{entriesFrame, entrySkewer.Spit({entriesFrame.Area.Size.X, UIRowHeight}, Gfx::align_Right), {5.f, 5.f}, {5.f, 5.f}};
-
+        BoxGui::Frame entryFrame{entriesFrame, entrySkewer.Spit({entriesFrame.Area.Size.X, UIRowHeight + UIRowGap}, Gfx::align_Right),
+            {0.f, UIRowGap / 2.f}, {0.f, UIRowGap / 2.f}};
         if (BoxGui::InputElement(entryFrame, BoxGui::MakeUniqueName(FileBrowserPrefix, i)))
             CurrentSelection = i;
-
         if (!entryFrame.IsVisible())
             continue;
 
-        Gfx::DrawRectangle(entryFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, entryFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
-        if (CurrentSelection == i)
-            Gfx::DrawRectangle(entryFrame.Area.Position, entryFrame.Area.Size, WidgetColorVibrant);
+        bool selected = CurrentSelection == i;
+        if (selected)
+        {
+            Gfx::DrawRoundedRect(entryFrame.Area.Position, entryFrame.Area.Size, RaisedColor, UIRadius);
+            Gfx::DrawRoundedOutline(entryFrame.Area.Position, entryFrame.Area.Size, AccentColor, UIRadius, 2.f);
+        }
 
-        BoxGui::Skewer skewer{entryFrame, entryFrame.Area.Size.Y/2.f, BoxGui::direction_Horizontal};
-        skewer.AlignLeft(20.f);
+        const float iconSize = 40.f;
+        Gfx::Vector2f iconPos = entryFrame.Area.Position + Gfx::Vector2f{12.f, (entryFrame.Area.Size.Y - iconSize) / 2.f};
+        Gfx::Vector2f textPos = entryFrame.Area.Position + Gfx::Vector2f{12.f + iconSize + 16.f, entryFrame.Area.Size.Y / 2.f};
 
-        if (!entry.IsDirectory && entry.ROMDBEntry != -1 && CurrentFileListingMode)
+        if (entry.IsDirectory)
+        {
+            // a small folder glyph
+            Gfx::DrawRoundedRect(iconPos + Gfx::Vector2f{6.f, 8.f}, {14.f, 8.f}, TextMutedColor, 3.f);
+            Gfx::DrawRoundedRect(iconPos + Gfx::Vector2f{6.f, 13.f}, {28.f, 18.f}, TextMutedColor, 4.f);
+            Gfx::DrawText(Gfx::SystemFontStandard, textPos, TextLineHeight, TextColor,
+                Gfx::align_Left, Gfx::align_Center, &CurrentEntryNames[entry.Name]);
+            Gfx::DrawText(Gfx::SystemFontStandard, entryFrame.Area.Position + Gfx::Vector2f{entryFrame.Area.Size.X - 16.f, entryFrame.Area.Size.Y / 2.f},
+                TextLineHeight * 0.8f, TextMutedColor, Gfx::align_Right, Gfx::align_Center, i == 0 && CurrentPath != "/" ? "Up" : "Folder");
+        }
+        else if (entry.ROMDBEntry != -1 && CurrentFileListingMode)
         {
             ROMMetaDatabase::ROMMeta& meta = ROMMetaDatabase::Database[entry.ROMDBEntry];
+            Gfx::DrawRoundedRect(iconPos, {iconSize, iconSize}, CardColor, 8.f);
             if (meta.HasIcon)
             {
-                BoxGui::Frame imageFrame{entryFrame, skewer.Spit({entryFrame.Area.Size.Y * 0.8f, entryFrame.Area.Size.Y * 0.8f})};
-                Gfx::DrawRectangle(meta.Icon.AtlasTexture, 
-                    imageFrame.Area.Position, imageFrame.Area.Size, 
+                Gfx::SetSampler(Gfx::sampler_Nearest | Gfx::sampler_ClampToEdge);
+                Gfx::DrawRectangle(meta.Icon.AtlasTexture,
+                    iconPos + Gfx::Vector2f{4.f, 4.f}, {iconSize - 8.f, iconSize - 8.f},
                     {(float)meta.Icon.PackX, (float)meta.Icon.PackY}, {32.f, 32.f},
-                    {1.f, 1.f, 1.f, 1.f});
+                    {1.f, 1.f, 1.f, 1.f}, false, 4.f);
+                Gfx::SetSampler(Gfx::sampler_Linear | Gfx::sampler_ClampToEdge);
             }
-
-            skewer.Advance(20.f); 
-
-            Gfx::DrawText(Gfx::SystemFontStandard,
-                skewer.CurrentPosition(), TextLineHeight,
-                DarkColor,
-                Gfx::align_Left, Gfx::align_Center,
-                meta.Title(ROMMetaDatabase::TitleLanguage));
+            Gfx::DrawText(Gfx::SystemFontStandard, textPos, TextLineHeight, TextColor,
+                Gfx::align_Left, Gfx::align_Center, meta.Title(ROMMetaDatabase::TitleLanguage));
         }
         else
         {
-            Gfx::DrawText(Gfx::SystemFontStandard,
-                skewer.CurrentPosition(), TextLineHeight,
-                DarkColor,
-                Gfx::align_Left, Gfx::align_Center,
-                &CurrentEntryNames[entry.Name]);
-        }
-
-        if (i > 0)
-        {
-            // draw separator
-            Gfx::DrawRectangle(entryFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-                {entryFrame.Area.Size.X - 2*10.f, 2.f},
-                SeparatorColor);
+            Gfx::DrawRoundedRect(iconPos, {iconSize, iconSize}, CardColor, 8.f);
+            Gfx::DrawText(Gfx::SystemFontStandard, textPos, TextLineHeight, TextColor,
+                Gfx::align_Left, Gfx::align_Center, &CurrentEntryNames[entry.Name]);
         }
     }
 

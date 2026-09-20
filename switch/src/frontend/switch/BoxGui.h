@@ -114,6 +114,7 @@ bool ConfirmPressed();
 bool CancelPressed();
 bool SearchPressed();
 bool DetailsPressed();
+bool AltPressed(); // X
 
 bool LeftPressed();
 bool RightPressed();
@@ -135,6 +136,11 @@ void ForceSelecton(u64 uniqueName, bool skipAnimation = true, int level = -1);
 u64 MakeUniqueName(const char* name, int salt);
 
 void Update(Frame& rootFrame, u64 keysDown, u64 keysUp);
+
+// Touch input: call once per frame before Update with the finger state in UI
+// coordinates. A tap selects and confirms the element under the finger, a drag
+// scrolls the scroll frame under it.
+void SetTouch(bool down, Gfx::Vector2f position);
 
 }
 

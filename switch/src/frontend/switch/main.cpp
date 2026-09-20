@@ -44,6 +44,7 @@
 
 bool Done = false;
 int CurrentUiScreen = uiScreen_Start;
+bool FocusStreamingSection = false;
 
 PadState Pad;
 
@@ -776,13 +777,13 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
     {
         // draw shadow first
         Gfx::DrawText(Gfx::SystemFontNintendoExt,
-            TouchCursorPosition + Gfx::Vector2f{2.f, 3.f}, TextLineHeight * 2.f, DarkColorTransparent,
+            TouchCursorPosition + Gfx::Vector2f{2.f, 3.f}, TextLineHeight * 2.f, OverlayColor,
             Gfx::align_Center, Gfx::align_Center,
             TouchDown
                 ? GFX_NINTENDOFONT_WII_HAND_HOLD
                 : GFX_NINTENDOFONT_WII_HAND);
         Gfx::DrawText(Gfx::SystemFontNintendoExt,
-            TouchCursorPosition, TextLineHeight * 2.f, WidgetColorBright,
+            TouchCursorPosition, TextLineHeight * 2.f, TextColor,
             Gfx::align_Center, Gfx::align_Center,
             TouchDown
                 ? GFX_NINTENDOFONT_WII_HAND_HOLD
@@ -791,7 +792,7 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
 
     if (Config::ShowPerformanceMetrics && State == emuState_Running)
     {
-        Gfx::DrawRectangle({0.f, 0.f}, {4.f*FrametimeHistogramLen, TextLineHeight * 4.f}, DarkColorTransparent);
+        Gfx::DrawRectangle({0.f, 0.f}, {4.f*FrametimeHistogramLen, TextLineHeight * 4.f}, OverlayColor);
         float sum = 0.f, max = 0.f, min = infinityf();
         for (int i = 0; i < FrametimeHistogramLen; i++)
         {
@@ -804,18 +805,18 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
         for (int i = 0; i < FrametimeHistogramLen; i++)
         {
             float frametime = FrametimeHistogram[idx];
-            Gfx::DrawRectangle({i * 3.f, TextLineHeight}, {3.f, frametime / max * TextLineHeight}, WidgetColorBright);
+            Gfx::DrawRectangle({i * 3.f, TextLineHeight}, {3.f, frametime / max * TextLineHeight}, TextColor);
             idx++;
             if (idx == FrametimeHistogramLen)
                 idx = 0;
         }
 
         float averageFrametime = sum / (float)FrametimeHistogramLen;
-        Gfx::DrawText(Gfx::SystemFontStandard, {0.f, 0.f}, TextLineHeight, WidgetColorBright, "avg: %.2fms min %.2fms max: %.2fms\n\nprof: %.2fms", averageFrametime, min, max, Profiler::Sum);
+        Gfx::DrawText(Gfx::SystemFontStandard, {0.f, 0.f}, TextLineHeight, TextColor, "avg: %.2fms min %.2fms max: %.2fms\n\nprof: %.2fms", averageFrametime, min, max, Profiler::Sum);
         if (Stream::Enabled())
         {
-            Gfx::DrawRectangle({0.f, TextLineHeight * 4.f}, {4.f*FrametimeHistogramLen, TextLineHeight}, DarkColorTransparent);
-            Gfx::DrawText(Gfx::SystemFontStandard, {0.f, TextLineHeight * 4.f}, TextLineHeight, WidgetColorBright,
+            Gfx::DrawRectangle({0.f, TextLineHeight * 4.f}, {4.f*FrametimeHistogramLen, TextLineHeight}, OverlayColor);
+            Gfx::DrawText(Gfx::SystemFontStandard, {0.f, TextLineHeight * 4.f}, TextLineHeight, TextColor,
                 "stream: %u frames %u pkts %u errs (errno %d) jpeg %u B enc %u us",
                 Stream::FramesSent(), Stream::PacketsSent(), Stream::SendErrors(), Stream::LastErrno(),
                 Stream::LastFrameBytes(), Stream::EncodeMicros());
@@ -827,7 +828,7 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
     if (State == emuState_Paused)
     {
         rc_client_paused();
-        Gfx::DrawRectangle({0.f, 0.f}, {1280.f, 1280.f}, DarkColorTransparent);
+        Gfx::DrawRectangle({0.f, 0.f}, {1280.f, 1280.f}, OverlayColor);
     }
 }
 
@@ -1157,6 +1158,21 @@ int main(int argc, const char* argv[])
         else
             KeyExplanation::Reset();
 
+        {
+            // touch drives the menus; while a game runs the touch screen belongs to the DS
+            HidTouchScreenState touchState;
+            bool touchDown = Emulation::State != Emulation::emuState_Running
+                && hidGetTouchScreenStates(&touchState, 1) && touchState.count > 0;
+            Gfx::Vector2f touchPos;
+            if (touchDown)
+            {
+                u32 tx, ty;
+                Gfx::Rotate90Deg(tx, ty, touchState.touches[0].x, touchState.touches[0].y, Config::GlobalRotation);
+                touchPos = {(float)tx, (float)ty};
+            }
+            BoxGui::SetTouch(touchDown, touchPos);
+        }
+
         BoxGui::Update(rootFrame, rawKeysDown, rawKeysUp);
 
         g_notification.Render();
@@ -1169,7 +1185,7 @@ int main(int argc, const char* argv[])
         Gfx::PopScissor();
 
         Gfx::EndFrame(Emulation::State == Emulation::emuState_Running
-            ? Gfx::Color() : WallpaperColor, rotation);
+            ? Gfx::Color() : BgColor, rotation);
     }
 
     Emulation::DeInit();

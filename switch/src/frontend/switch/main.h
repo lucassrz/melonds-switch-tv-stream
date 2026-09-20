@@ -13,6 +13,8 @@ enum
 
 extern bool Done;
 extern int CurrentUiScreen;
+// set by the start menu so the display settings open on the streaming section
+extern bool FocusStreamingSection;
 
 namespace Emulation
 {

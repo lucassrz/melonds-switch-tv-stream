@@ -5,18 +5,19 @@
 #include "main.h"
 #include "ROMMetaDatabase.h"
 #include "ErrorDialog.h"
-
 #include "PlatformConfig.h"
 #include "RetroAchievements.h"
 #include "../FrontendUtil.h"
 
 #include "stb_image/stb_image.h"
 
+#include <dirent.h>
+#include <stdio.h>
 #include <string.h>
-
+#include <strings.h>
 #include <string>
 #include <vector>
-#include <filesystem>
+#include <algorithm>
 
 namespace StartMenu
 {
@@ -26,10 +27,79 @@ struct LastPlayedROM
     int TitleIconIdx;
     std::string Path;
 };
+
 std::vector<LastPlayedROM> LastPlayedROMs;
+
+struct LibraryEntry
+{
+    std::string Path;
+    int MetaIdx;
+};
+
+std::vector<LibraryEntry> Library;
+std::string LibraryPath;
 
 u32 MelonLogoTexture;
 u32 SavestateMask;
+
+enum
+{
+    nav_Library,
+    nav_Browse,
+    nav_BootFirmware,
+    nav_Emulation,
+    nav_Display,
+    nav_Streaming,
+    nav_Input,
+    nav_Exit,
+    nav_TVCard,
+    // pause menu
+    nav_Continue = 0,
+    nav_Lid,
+    nav_Reset,
+    nav_Achievements,
+    nav_PauseDisplay,
+    nav_PauseInput,
+    nav_Close,
+};
+
+static bool HasNdsExtension(const char* name)
+{
+    int len = strlen(name);
+    if (len < 4) return false;
+    const char* ext = name + len - 4;
+    return strcasecmp(ext, ".nds") == 0 || strcasecmp(ext, ".dsi") == 0 || strcasecmp(ext, ".srl") == 0;
+}
+
+void RefreshLibrary(const char* folder)
+{
+    Library.clear();
+    LibraryPath = folder;
+
+    DIR* dir = opendir(folder);
+    if (!dir)
+        return;
+    std::string base = folder;
+    if (base.empty() || base.back() != '/')
+        base += '/';
+
+    while (dirent* entry = readdir(dir))
+    {
+        if (entry->d_type != DT_REG || !HasNdsExtension(entry->d_name))
+            continue;
+        std::string path = base + entry->d_name;
+        int idx = ROMMetaDatabase::QueryMeta(entry->d_name, path.c_str());
+        Library.push_back({path, idx});
+    }
+    closedir(dir);
+
+    std::sort(Library.begin(), Library.end(), [](const LibraryEntry& a, const LibraryEntry& b)
+    {
+        return strcasecmp(ROMMetaDatabase::Database[a.MetaIdx].Title(ROMMetaDatabase::TitleLanguage),
+            ROMMetaDatabase::Database[b.MetaIdx].Title(ROMMetaDatabase::TitleLanguage)) < 0;
+    });
+    ROMMetaDatabase::UpdateTexture();
+}
 
 void Init()
 {
@@ -47,8 +117,9 @@ void Init()
         const char* romname = strrchr(Config::LastROMPath[i], '/') + 1;
         LastPlayedROMs.push_back({ROMMetaDatabase::QueryMeta(romname, Config::LastROMPath[i]), Config::LastROMPath[i]});
     }
-
     ROMMetaDatabase::UpdateTexture();
+
+    RefreshLibrary(Config::LastROMFolder);
 }
 
 void PushLastPlayed(const std::string& newPath, int titleIconIdx)
@@ -71,6 +142,7 @@ void PushLastPlayed(const std::string& newPath, int titleIconIdx)
             return;
         }
     }
+
     if (LastPlayedROMs.size() >= 5)
         LastPlayedROMs.pop_back();
     LastPlayedROMs.insert(LastPlayedROMs.begin(), {titleIconIdx, newPath});
@@ -89,86 +161,364 @@ void DeInit()
     Gfx::TextureDelete(MelonLogoTexture);
 }
 
-bool SideBarEntry(BoxGui::Frame& optionsFrame, BoxGui::Skewer& optionSkewer, const char* name, bool last = false)
-{
-    BoxGui::Frame buttonFrame{optionsFrame, optionSkewer.Spit({optionsFrame.Area.Size.X, UIRowHeight}, Gfx::align_Right),
-        {0.f, 5.f}, {0.f, 5.f}};
+// ---- drawing helpers ---------------------------------------------------------
 
-    bool selected = BoxGui::InputElement(buttonFrame, BoxGui::MakeUniqueName("sidebar", (u64)name));
+static void DrawRomIcon(ROMMetaDatabase::ROMMeta& meta, Gfx::Vector2f position, float size, float radius)
+{
+    Gfx::DrawRoundedRect(position, {size, size}, RaisedColor, radius);
+    if (!meta.HasIcon)
+        return;
+    float pad = size * 0.12f;
+    Gfx::SetSampler(Gfx::sampler_Nearest | Gfx::sampler_ClampToEdge);
+    Gfx::DrawRectangle(meta.Icon.AtlasTexture,
+        position + Gfx::Vector2f{pad, pad}, {size - 2.f * pad, size - 2.f * pad},
+        {(float)meta.Icon.PackX, (float)meta.Icon.PackY}, {32.f, 32.f},
+        {1.f, 1.f, 1.f, 1.f}, false, radius * 0.5f);
+    Gfx::SetSampler(Gfx::sampler_Linear | Gfx::sampler_ClampToEdge);
+}
+
+static void StartGame(const std::string& path, int metaIdx, bool onTV)
+{
+    if (onTV)
+        Config::StreamEnable = 1;
+    Emulation::LoadROM(path.c_str());
+    PushLastPlayed(path, metaIdx);
+}
+
+// A sidebar entry: pill highlight when selected. Returns true when activated.
+static bool NavEntry(BoxGui::Frame& sidebar, BoxGui::Skewer& skewer, const char* name, int idx, bool first = false)
+{
+    BoxGui::Frame frame{sidebar, skewer.Spit({sidebar.Area.Size.X, 48.f + 6.f}, Gfx::align_Right), {0.f, 3.f}, {0.f, 3.f}};
+    bool selected = BoxGui::InputElement(frame, BoxGui::MakeUniqueName("sidebar", idx), first);
+    if (selected)
+    {
+        KeyExplanation::Explain(KeyExplanation::button_A, "Select");
+        Gfx::DrawRoundedRect(frame.Area.Position, frame.Area.Size, AccentColor, UIRadius);
+    }
+    Gfx::DrawText(Gfx::SystemFontStandard, frame.Area.Position + Gfx::Vector2f{16.f, frame.Area.Size.Y / 2.f},
+        TextLineHeight, selected ? BgColor : TextSoftColor, Gfx::align_Left, Gfx::align_Center, name);
+    return selected && BoxGui::ConfirmPressed();
+}
+
+// A filled or outlined button. Returns true when activated.
+static bool Button(BoxGui::Frame& parent, BoxGui::Rect rect, const char* label, u64 name, bool primary, const char* hint)
+{
+    BoxGui::Frame frame{parent, rect};
+    bool selected = BoxGui::InputElement(frame, name);
+    if (primary)
+    {
+        Gfx::DrawRoundedRect(frame.Area.Position, frame.Area.Size, AccentColor, 14.f);
+        if (selected)
+            Gfx::DrawRoundedOutline(frame.Area.Position - Gfx::Vector2f{4.f, 4.f}, frame.Area.Size + Gfx::Vector2f{8.f, 8.f}, TextColor, 18.f, 2.f);
+    }
+    else
+    {
+        if (selected)
+            Gfx::DrawRoundedRect(frame.Area.Position, frame.Area.Size, RaisedColor, 14.f);
+        Gfx::DrawRoundedOutline(frame.Area.Position, frame.Area.Size, selected ? AccentColor : LineColor, 14.f, selected ? 2.f : 1.f);
+    }
+    Gfx::DrawText(Gfx::SystemFontStandard, frame.Area.Position + frame.Area.Size * 0.5f, TextLineHeight,
+        primary ? BgColor : TextSoftColor, Gfx::align_Center, Gfx::align_Center, label);
+    if (selected)
+        KeyExplanation::Explain(KeyExplanation::button_A, hint);
+    return selected && BoxGui::ConfirmPressed();
+}
+
+static void DrawSidebarHeader(BoxGui::Frame& sidebar, BoxGui::Skewer& skewer)
+{
+    BoxGui::Frame logoRow{sidebar, skewer.Spit({sidebar.Area.Size.X, 44.f}, Gfx::align_Right)};
+    Gfx::Vector2f pos = logoRow.Area.Position + Gfx::Vector2f{8.f, 0.f};
+    Gfx::DrawRectangle(MelonLogoTexture, pos, {44.f, 44.f}, {}, {128.f, 128.f}, {1.f, 1.f, 1.f, 1.f}, false, UIRadius);
+    Gfx::DrawText(Gfx::SystemFontStandard, pos + Gfx::Vector2f{58.f, 12.f}, TextLineHeight * 1.2f, TextColor,
+        Gfx::align_Left, Gfx::align_Center, "melonDS");
+    Gfx::DrawText(Gfx::SystemFontStandard, pos + Gfx::Vector2f{58.f, 33.f}, TextLineHeight * 0.7f, TextMutedColor,
+        Gfx::align_Left, Gfx::align_Center, "Switch · TV Stream");
+}
+
+// TV status card at the bottom of the sidebar; activating it opens the streaming settings.
+static void TVCard(BoxGui::Frame& sidebar, BoxGui::Skewer& skewer)
+{
+    BoxGui::Frame frame{sidebar, skewer.Spit({sidebar.Area.Size.X, 56.f}, Gfx::align_Right)};
+    bool selected = BoxGui::InputElement(frame, BoxGui::MakeUniqueName("sidebar", nav_TVCard));
+    bool linked = Config::StreamEnable && Config::StreamHost[0] != '\0';
+
+    Gfx::DrawRoundedRect(frame.Area.Position, frame.Area.Size, RaisedColor, UIRadius);
+    if (selected)
+        Gfx::DrawRoundedOutline(frame.Area.Position, frame.Area.Size, AccentColor, UIRadius, 2.f);
+    Gfx::DrawCircle(frame.Area.Position + Gfx::Vector2f{18.f, frame.Area.Size.Y / 2.f}, 4.f, linked ? AccentColor : TextMutedColor);
+    Gfx::DrawText(Gfx::SystemFontStandard, frame.Area.Position + Gfx::Vector2f{32.f, 19.f}, TextLineHeight * 0.85f, TextColor,
+        Gfx::align_Left, Gfx::align_Center, linked ? Config::StreamHost : "No TV linked");
+    Gfx::DrawText(Gfx::SystemFontStandard, frame.Area.Position + Gfx::Vector2f{32.f, 38.f}, TextLineHeight * 0.7f, TextMutedColor,
+        Gfx::align_Left, Gfx::align_Center, linked ? "Top screen goes to the TV" : "Set up TV streaming");
 
     if (selected)
     {
-        Gfx::DrawRectangle(buttonFrame.Area.Position, buttonFrame.Area.Size, WidgetColorVibrant);
-        KeyExplanation::Explain(KeyExplanation::button_A, "Select");
+        KeyExplanation::Explain(KeyExplanation::button_A, "TV settings");
+        if (BoxGui::ConfirmPressed())
+        {
+            FocusStreamingSection = true;
+            CurrentUiScreen = uiScreen_DisplaySettings;
+        }
     }
+}
 
-    BoxGui::Skewer buttonSkewer{buttonFrame, buttonFrame.Area.Size.Y/2.f, BoxGui::direction_Horizontal};
-    buttonSkewer.AlignLeft(20.f);
-    Gfx::DrawText(Gfx::SystemFontStandard, buttonSkewer.CurrentPosition(), TextLineHeight, DarkColor,
-        Gfx::align_Left, Gfx::align_Center,
-        name);
+// ---- screens -----------------------------------------------------------------
 
-    Gfx::DrawRectangle(buttonFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-        {buttonFrame.Area.Size.X - 2*10.f, 2.f},
-        SeparatorColor);
-    if (last)
+static void DoHome(BoxGui::Frame& mainFrame)
+{
+    if (LibraryPath != Config::LastROMFolder)
+        RefreshLibrary(Config::LastROMFolder);
+
+    BoxGui::Skewer vskewer{mainFrame, 0.f, BoxGui::direction_Vertical};
+    const float pad = 24.f;
+
+    // ---- continue playing
+    if (!LastPlayedROMs.empty())
     {
-        Gfx::DrawRectangle(buttonFrame.Area.Position + Gfx::Vector2f{10.f, buttonFrame.Area.Size.Y + 5.f - 1.f},
-            {buttonFrame.Area.Size.X - 2*10.f, 2.f},
-            SeparatorColor);
+        const float heroHeight = 168.f;
+        BoxGui::Frame hero{mainFrame, vskewer.Spit({mainFrame.Area.Size.X, heroHeight}, Gfx::align_Right)};
+        Gfx::DrawRoundedRect(hero.Area.Position, hero.Area.Size, CardColor, UIRadiusLarge);
+        Gfx::DrawRoundedOutline(hero.Area.Position, hero.Area.Size, BorderColor, UIRadiusLarge, 1.f);
+
+        LastPlayedROM& last = LastPlayedROMs[0];
+        ROMMetaDatabase::ROMMeta& meta = ROMMetaDatabase::Database[last.TitleIconIdx];
+        float iconSize = heroHeight - 2.f * pad;
+        DrawRomIcon(meta, hero.Area.Position + Gfx::Vector2f{pad, pad}, iconSize, 16.f);
+
+        float textX = pad + iconSize + 24.f;
+        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 4.f}, TextLineHeight * 0.7f, AccentColor,
+            Gfx::align_Left, Gfx::align_Center, "CONTINUE PLAYING");
+        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 54.f}, TextLineHeight * 1.6f, TextColor,
+            Gfx::align_Left, Gfx::align_Center, meta.Title(ROMMetaDatabase::TitleLanguage));
+        const char* file = strrchr(last.Path.c_str(), '/');
+        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 104.f}, TextLineHeight * 0.8f, TextMutedColor,
+            Gfx::align_Left, Gfx::align_Center, file ? file + 1 : last.Path.c_str());
+
+        const float buttonWidth = 170.f;
+        float bx = hero.Area.Size.X - pad - buttonWidth;
+        if (Button(hero, {{bx, pad}, {buttonWidth, 52.f}}, "Resume", BoxGui::MakeUniqueName("hero", 0), true, "Play"))
+            StartGame(last.Path, last.TitleIconIdx, false);
+        if (Button(hero, {{bx, pad + 52.f + 12.f}, {buttonWidth, 44.f}}, "Play on TV", BoxGui::MakeUniqueName("hero", 1), false, "Play with TV stream"))
+            StartGame(last.Path, last.TitleIconIdx, true);
+
+        vskewer.Advance(24.f);
     }
 
-    return selected && BoxGui::ConfirmPressed();
+    // ---- library header
+    {
+        BoxGui::Frame header{mainFrame, vskewer.Spit({mainFrame.Area.Size.X, 32.f}, Gfx::align_Right)};
+        Gfx::DrawText(Gfx::SystemFontStandard, header.Area.Position + Gfx::Vector2f{0.f, 16.f}, TextLineHeight * 1.2f, TextColor,
+            Gfx::align_Left, Gfx::align_Center, "Library");
+        char summary[600];
+        snprintf(summary, sizeof(summary), "%d game%s · %s", (int)Library.size(), Library.size() == 1 ? "" : "s", LibraryPath.c_str());
+        Gfx::DrawText(Gfx::SystemFontStandard, header.Area.Position + Gfx::Vector2f{header.Area.Size.X, 18.f}, TextLineHeight * 0.75f, TextMutedColor,
+            Gfx::align_Right, Gfx::align_Center, summary);
+        vskewer.Advance(12.f);
+    }
+
+    // ---- library grid (leave room for the key hints at the bottom)
+    float gridHeight = vskewer.RemainingLength() - 64.f;
+    BoxGui::Frame grid{mainFrame, vskewer.Spit({mainFrame.Area.Size.X, gridHeight}, Gfx::align_Right),
+        {0.f, 0.f}, {0.f, 0.f},
+        BoxGui::direction_Vertical, BoxGui::MakeUniqueName("library", -1), false, true};
+    Gfx::PushScissor(grid.Area.Position.X, grid.Area.Position.Y, grid.Area.Size.X, grid.Area.Size.Y);
+
+    if (Library.empty())
+    {
+        BoxGui::Frame empty{grid, {{0.f, 0.f}, {grid.Area.Size.X, 120.f}}};
+        Gfx::DrawRoundedRect(empty.Area.Position, empty.Area.Size, CardColor, UIRadiusLarge);
+        Gfx::DrawRoundedOutline(empty.Area.Position, empty.Area.Size, BorderColor, UIRadiusLarge, 1.f);
+        Gfx::DrawText(Gfx::SystemFontStandard, empty.Area.Position + Gfx::Vector2f{pad, 40.f}, TextLineHeight * 1.1f, TextColor,
+            Gfx::align_Left, Gfx::align_Center, "No DS games in this folder");
+        Gfx::DrawText(Gfx::SystemFontStandard, empty.Area.Position + Gfx::Vector2f{pad, 76.f}, TextLineHeight * 0.85f, TextMutedColor,
+            Gfx::align_Left, Gfx::align_Center, "Use \"Browse files\" to open the folder that holds your .nds dumps.");
+    }
+    else
+    {
+        const int columns = 4;
+        const float gap = 20.f;
+        float tileWidth = (grid.Area.Size.X - gap * (columns - 1)) / columns;
+        float iconSize = tileWidth - 28.f;
+        float tileHeight = 14.f + iconSize + 12.f + TextLineHeight * 2.4f + 14.f;
+
+        for (u32 i = 0; i < Library.size(); i++)
+        {
+            int col = i % columns, row = i / columns;
+            BoxGui::Frame tile{grid, {{col * (tileWidth + gap), row * (tileHeight + gap)}, {tileWidth, tileHeight}}};
+            bool selected = BoxGui::InputElement(tile, BoxGui::MakeUniqueName("library_tile", i), LastPlayedROMs.empty() && i == 0);
+            if (!tile.IsVisible())
+                continue;
+
+            ROMMetaDatabase::ROMMeta& meta = ROMMetaDatabase::Database[Library[i].MetaIdx];
+            Gfx::DrawRoundedRect(tile.Area.Position, tile.Area.Size, CardColor, 16.f);
+            if (selected)
+                Gfx::DrawRoundedOutline(tile.Area.Position, tile.Area.Size, AccentColor, 16.f, 2.f);
+            DrawRomIcon(meta, tile.Area.Position + Gfx::Vector2f{14.f, 14.f}, iconSize, 12.f);
+
+            Gfx::PushScissor(tile.Area.Position.X, tile.Area.Position.Y, tile.Area.Size.X, tile.Area.Size.Y);
+            Gfx::DrawText(Gfx::SystemFontStandard, tile.Area.Position + Gfx::Vector2f{14.f, 14.f + iconSize + 12.f + TextLineHeight * 0.45f},
+                TextLineHeight * 0.85f, TextColor, Gfx::align_Left, Gfx::align_Center, meta.Title(ROMMetaDatabase::TitleLanguage));
+            const char* file = strrchr(Library[i].Path.c_str(), '/');
+            Gfx::DrawText(Gfx::SystemFontStandard, tile.Area.Position + Gfx::Vector2f{14.f, 14.f + iconSize + 12.f + TextLineHeight * 1.8f},
+                TextLineHeight * 0.7f, TextMutedColor, Gfx::align_Left, Gfx::align_Center, file ? file + 1 : "");
+            Gfx::PopScissor();
+
+            if (selected)
+            {
+                KeyExplanation::Explain(KeyExplanation::button_A, "Play");
+                KeyExplanation::Explain(KeyExplanation::button_X, "Play on TV");
+                if (BoxGui::ConfirmPressed())
+                    StartGame(Library[i].Path, Library[i].MetaIdx, false);
+                else if (BoxGui::AltPressed())
+                    StartGame(Library[i].Path, Library[i].MetaIdx, true);
+            }
+        }
+    }
+    Gfx::PopScissor();
+}
+
+static void DoSavestateRow(BoxGui::Frame& mainFrame, BoxGui::Skewer& vskewer, const char* title, bool loading)
+{
+    BoxGui::Frame titleFrame{mainFrame, vskewer.Spit({mainFrame.Area.Size.X, 28.f}, Gfx::align_Right)};
+    Gfx::DrawText(Gfx::SystemFontStandard, titleFrame.Area.Position + Gfx::Vector2f{0.f, 14.f}, TextLineHeight * 0.8f, TextMutedColor,
+        Gfx::align_Left, Gfx::align_Center, title);
+
+    const float buttonSize = 56.f, gap = 10.f;
+    int count = loading ? 9 : 8;
+    BoxGui::Frame rowFrame{mainFrame, vskewer.Spit({mainFrame.Area.Size.X, buttonSize}, Gfx::align_Right)};
+    int selectedSlot = -1;
+    for (int i = 0; i < count; i++)
+    {
+        BoxGui::Frame button{rowFrame, {{i * (buttonSize + gap), 0.f}, {i == 8 ? buttonSize * 1.6f : buttonSize, buttonSize}}};
+        bool enabled = Config::ConsoleType != 1
+            && (!loading || (i < 8 ? (SavestateMask & (1 << i)) : Frontend::SavestateLoaded));
+        bool selected = false;
+        if (enabled)
+        {
+            selected = BoxGui::InputElement(button, BoxGui::MakeUniqueName(loading ? "loadstate" : "savestate", i));
+            if (selected)
+                selectedSlot = i;
+        }
+        Gfx::DrawRoundedRect(button.Area.Position, button.Area.Size, selected ? AccentColor : RaisedColor, UIRadius);
+        if (!enabled)
+            Gfx::DrawRoundedOutline(button.Area.Position, button.Area.Size, BorderColor, UIRadius, 1.f);
+        char label[8];
+        if (i == 8)
+            strcpy(label, "Undo");
+        else
+            snprintf(label, sizeof(label), "%d", i + 1);
+        Gfx::DrawText(Gfx::SystemFontStandard, button.Area.Position + button.Area.Size * 0.5f, TextLineHeight,
+            selected ? BgColor : (enabled ? TextColor : TextMutedColor), Gfx::align_Center, Gfx::align_Center, label);
+    }
+    vskewer.Advance(20.f);
+
+    if (selectedSlot == -1)
+        return;
+    KeyExplanation::Explain(KeyExplanation::button_A, loading ? "Load state" : "Save state");
+    if (!BoxGui::ConfirmPressed())
+        return;
+
+    if (!loading)
+    {
+        char filename[512];
+        Frontend::GetSavestateName(selectedSlot + 1, filename, 512);
+        if (Frontend::SaveState(filename))
+            SavestateMask |= 1 << selectedSlot;
+        else
+            ErrorDialog::Open("Failed to create savestate");
+    }
+    else
+    {
+        bool loadedSuccessfully;
+        if (selectedSlot < 8)
+        {
+            char filename[512];
+            Frontend::GetSavestateName(selectedSlot + 1, filename, 512);
+            loadedSuccessfully = Frontend::LoadState(filename);
+        }
+        else
+        {
+            Frontend::UndoStateLoad();
+            loadedSuccessfully = true;
+        }
+        if (loadedSuccessfully)
+        {
+            Emulation::SetPause(false);
+            BoxGui::ForceSelecton(BoxGui::MakeUniqueName("sidebar", nav_Continue));
+        }
+        else
+        {
+            ErrorDialog::Open("Couldn't load savefile");
+        }
+    }
+}
+
+static void DoPause(BoxGui::Frame& mainFrame)
+{
+    BoxGui::Skewer vskewer{mainFrame, 0.f, BoxGui::direction_Vertical};
+    const float pad = 24.f;
+
+    if (!LastPlayedROMs.empty())
+    {
+        const float heroHeight = 120.f;
+        BoxGui::Frame hero{mainFrame, vskewer.Spit({mainFrame.Area.Size.X, heroHeight}, Gfx::align_Right)};
+        Gfx::DrawRoundedRect(hero.Area.Position, hero.Area.Size, CardColor, UIRadiusLarge);
+        Gfx::DrawRoundedOutline(hero.Area.Position, hero.Area.Size, BorderColor, UIRadiusLarge, 1.f);
+        LastPlayedROM& last = LastPlayedROMs[0];
+        ROMMetaDatabase::ROMMeta& meta = ROMMetaDatabase::Database[last.TitleIconIdx];
+        float iconSize = heroHeight - 2.f * pad;
+        DrawRomIcon(meta, hero.Area.Position + Gfx::Vector2f{pad, pad}, iconSize, 12.f);
+        float textX = pad + iconSize + 20.f;
+        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 4.f}, TextLineHeight * 0.7f, AccentColor,
+            Gfx::align_Left, Gfx::align_Center, "PAUSED");
+        Gfx::DrawText(Gfx::SystemFontStandard, hero.Area.Position + Gfx::Vector2f{textX, pad + 40.f}, TextLineHeight * 1.4f, TextColor,
+            Gfx::align_Left, Gfx::align_Center, meta.Title(ROMMetaDatabase::TitleLanguage));
+        vskewer.Advance(28.f);
+    }
+
+    if (Config::hardcoreMode)
+        return;
+
+    BoxGui::Frame title{mainFrame, vskewer.Spit({mainFrame.Area.Size.X, 32.f}, Gfx::align_Right)};
+    Gfx::DrawText(Gfx::SystemFontStandard, title.Area.Position + Gfx::Vector2f{0.f, 16.f}, TextLineHeight * 1.2f, TextColor,
+        Gfx::align_Left, Gfx::align_Center, "Save states");
+    vskewer.Advance(12.f);
+    DoSavestateRow(mainFrame, vskewer, "SAVE TO SLOT", false);
+    DoSavestateRow(mainFrame, vskewer, "LOAD FROM SLOT", true);
 }
 
 void DoGui(BoxGui::Frame& parent)
 {
-    BoxGui::Skewer skewer{parent, 0.f, BoxGui::direction_Horizontal};
+    bool paused = Emulation::State == Emulation::emuState_Paused;
 
+    // ---- sidebar
     {
-        BoxGui::Frame sideBarFrame{parent, skewer.Spit({320.f, parent.Area.Size.Y}, Gfx::align_Right), {5.f, 0.f}, {5.f, 0.f}};
-        Gfx::DrawRectangle(sideBarFrame.Area.Position, sideBarFrame.Area.Size, WidgetColorBright, true);
+        BoxGui::Frame sidebar{parent, {{0.f, 0.f}, {SidebarWidth, parent.Area.Size.Y}}, {24.f, 36.f}, {24.f, 28.f}};
+        Gfx::DrawRectangle({0.f, 0.f}, {SidebarWidth, parent.Area.Size.Y}, PanelColor);
+        Gfx::DrawRectangle({SidebarWidth - 1.f, 0.f}, {1.f, parent.Area.Size.Y}, BorderColor);
 
-        BoxGui::Skewer sideBarSkewer{sideBarFrame, 0.f, BoxGui::direction_Vertical};
+        BoxGui::Skewer skewer{sidebar, 0.f, BoxGui::direction_Vertical};
+        DrawSidebarHeader(sidebar, skewer);
+        skewer.Advance(32.f);
 
-        const float spacing = UIRowHeight/2.f;
-        sideBarSkewer.AlignLeft(spacing);
-
-        if (Emulation::State == Emulation::emuState_Paused)
+        if (paused)
         {
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Continue", true))
-            {
+            if (NavEntry(sidebar, skewer, "Continue", nav_Continue, true))
                 Emulation::SetPause(false);
-            }
-            sideBarSkewer.Advance(spacing);
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, Emulation::LidClosed ? "Open lid" : "Close lid"))
+            if (NavEntry(sidebar, skewer, Emulation::LidClosed ? "Open lid" : "Close lid", nav_Lid))
             {
                 Emulation::LidClosed ^= true;
                 Emulation::SetPause(false);
             }
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Reset", true))
-            {
+            if (NavEntry(sidebar, skewer, "Reset", nav_Reset))
                 Emulation::Reset();
-            }
-            sideBarSkewer.Advance(spacing);
-            if (isConnected() && SideBarEntry(sideBarFrame, sideBarSkewer, "RetroAchievements List")) 
-            {
-                CurrentUiScreen = uiScreen_RetroAchievements;   
-            }
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Display settings"))
-            {
+            skewer.Advance(12.f);
+            if (isConnected() && NavEntry(sidebar, skewer, "Achievements", nav_Achievements))
+                CurrentUiScreen = uiScreen_RetroAchievements;
+            if (NavEntry(sidebar, skewer, "Display", nav_PauseDisplay))
                 CurrentUiScreen = uiScreen_DisplaySettings;
-            }
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Input settings", true))
-            {
+            if (NavEntry(sidebar, skewer, "Input", nav_PauseInput))
                 CurrentUiScreen = uiScreen_InputSettings;
-            }
-            sideBarSkewer.Advance(spacing);
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Close", true))
-            {
-                Emulation::Stop();
-                g_loadAchievements = true;
-            }
 
             KeyExplanation::Explain(KeyExplanation::button_B, "Unpause");
             if (BoxGui::CancelPressed())
@@ -176,265 +526,54 @@ void DoGui(BoxGui::Frame& parent)
         }
         else
         {
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Browse", true))
-            {
+            if (NavEntry(sidebar, skewer, "Library", nav_Library, true))
+                BoxGui::ForceSelecton(BoxGui::MakeUniqueName(LastPlayedROMs.empty() ? "library_tile" : "hero", 0), false);
+            if (NavEntry(sidebar, skewer, "Browse files", nav_Browse))
                 CurrentUiScreen = uiScreen_BrowseROM;
-            }
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Boot firmware", true))
-            {
+            if (NavEntry(sidebar, skewer, "Boot firmware", nav_BootFirmware))
                 Emulation::LoadBIOS();
-            }
-            sideBarSkewer.Advance(spacing);
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Emulation settings"))
-            {
+            skewer.Advance(12.f);
+            if (NavEntry(sidebar, skewer, "Emulation", nav_Emulation))
                 CurrentUiScreen = uiScreen_EmulationSettings;
-            }
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Display settings"))
+            if (NavEntry(sidebar, skewer, "Display", nav_Display))
+                CurrentUiScreen = uiScreen_DisplaySettings;
+            if (NavEntry(sidebar, skewer, "TV streaming", nav_Streaming))
             {
+                FocusStreamingSection = true;
                 CurrentUiScreen = uiScreen_DisplaySettings;
             }
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Input settings", true))
-            {
+            if (NavEntry(sidebar, skewer, "Input", nav_Input))
                 CurrentUiScreen = uiScreen_InputSettings;
-            }
-            sideBarSkewer.Advance(spacing);
-            if (SideBarEntry(sideBarFrame, sideBarSkewer, "Exit", true))
-            {
-                Done = true;
-            }
         }
-    }
 
-    {
-        BoxGui::Frame mainFrame{parent, skewer.Spit({skewer.RemainingLength(), parent.Area.Size.Y}, Gfx::align_Right),
-            {5.f, 0.f}, {5.f, 0.f}};
-        Gfx::DrawRectangle(mainFrame.Area.Position, mainFrame.Area.Size, WidgetColorBright, true);
-
-        BoxGui::Skewer vskewer{mainFrame, 0.f, BoxGui::direction_Vertical};
-
-        if (Emulation::State == Emulation::emuState_Nothing)
+        // bottom of the sidebar, laid out upwards
+        BoxGui::Skewer bottom{sidebar, 0.f, BoxGui::direction_Vertical};
+        bottom.AlignRight(0.f);
+        if (paused)
         {
-            BoxGui::Frame logoFrame{mainFrame, vskewer.Spit({160.f, 160.f}, Gfx::align_Right), {15.f, 15.f}, {15.f, 15.f}};
-            Gfx::DrawRectangle(MelonLogoTexture, logoFrame.Area.Position, logoFrame.Area.Size, {}, {128.f, 128.f}, {1.f, 1.f, 1.f, 1.f});
-            Gfx::DrawText(Gfx::SystemFontStandard,
-                {logoFrame.Area.Position.X + logoFrame.Area.Size.X + 25.f,
-                logoFrame.Area.Position.Y + logoFrame.Area.Size.Y / 2.f}, 
-                TextLineHeight * 2.f,
-                DarkColor,
-                Gfx::align_Left, Gfx::align_Center,
-                "melonDS");
-
-            vskewer.Advance(20.f);
-
-            BoxGui::Frame titleFrame{mainFrame, vskewer.Spit({0.f, TextLineHeight * 3.f}, Gfx::align_Right), {15.f, 15.f}, {15.f, 15.f}};
-            Gfx::DrawText(Gfx::SystemFontStandard, titleFrame.Area.Position, TextLineHeight * 2.5f, DarkColor, "Last played...");
-
-            vskewer.Advance(15.f);
-
-            int selectedEntry = -1;
-            for (int i = 0; i < LastPlayedROMs.size(); i++)
+            if (NavEntry(sidebar, bottom, "Close game", nav_Close))
             {
-                BoxGui::Frame entryFrame{mainFrame, vskewer.Spit({mainFrame.Area.Size.X, UIRowHeight}, Gfx::align_Right), {5.f, 5.f}, {5.f, 5.f}};
-
-                if (BoxGui::InputElement(entryFrame, BoxGui::MakeUniqueName("lastplayed_rom", i)))
-                {
-                    Gfx::DrawRectangle(entryFrame.Area.Position, entryFrame.Area.Size, WidgetColorVibrant);
-                    selectedEntry = i;
-                }
-
-                BoxGui::Skewer entrySkewer{entryFrame, entryFrame.Area.Size.Y / 2.f, BoxGui::direction_Horizontal};
-
-                entrySkewer.AlignLeft(20.f);
-
-                ROMMetaDatabase::ROMMeta& meta = ROMMetaDatabase::Database[LastPlayedROMs[i].TitleIconIdx];
-                if (meta.HasIcon)
-                {
-                    BoxGui::Frame imageFrame{entryFrame, entrySkewer.Spit({entryFrame.Area.Size.Y * 0.8f, entryFrame.Area.Size.Y * 0.8f})};
-                    Gfx::DrawRectangle(meta.Icon.AtlasTexture, 
-                        imageFrame.Area.Position, imageFrame.Area.Size, 
-                        {(float)meta.Icon.PackX, (float)meta.Icon.PackY}, {32.f, 32.f},
-                        {1.f, 1.f, 1.f, 1.f});
-                }
-                entrySkewer.Advance(20.f);
-
-                Gfx::DrawText(Gfx::SystemFontStandard,
-                    entrySkewer.CurrentPosition(), TextLineHeight,
-                    DarkColor,
-                    Gfx::align_Left, Gfx::align_Center,
-                    meta.Title(ROMMetaDatabase::TitleLanguage));
-
-                if (i > 0)
-                {
-                    // draw separator
-                    Gfx::DrawRectangle(entryFrame.Area.Position + Gfx::Vector2f{10.f, -(5.f + 1.f)},
-                        {entryFrame.Area.Size.X - 2*10.f, 2.f},
-                        SeparatorColor);
-                }
-            }
-
-            if (selectedEntry != -1)
-            {
-                KeyExplanation::Explain(KeyExplanation::button_A, "Start");
-                if (BoxGui::ConfirmPressed())
-                {
-                    Emulation::LoadROM(LastPlayedROMs[selectedEntry].Path.c_str());
-                    PushLastPlayed(LastPlayedROMs[selectedEntry].Path, LastPlayedROMs[selectedEntry].TitleIconIdx);
-                }
+                Emulation::Stop();
+                g_loadAchievements = true;
             }
         }
         else
         {
-            BoxGui::Frame titleFrame{mainFrame, vskewer.Spit({0.f, TextLineHeight * 3.f}, Gfx::align_Right), {15.f, 15.f}, {15.f, 15.f}};
-            if (!Config::hardcoreMode) {
-                Gfx::DrawText(Gfx::SystemFontStandard, titleFrame.Area.Position, TextLineHeight * 2.5f, DarkColor, "Savestates");
-
-                vskewer.Advance(20.f);
-    
-                BoxGui::Frame saveTitleFrame{mainFrame, vskewer.Spit({0.f, TextLineHeight * 2.f}, Gfx::align_Right), {15.f, 0.f}};
-                Gfx::DrawText(Gfx::SystemFontStandard, saveTitleFrame.Area.Position, TextLineHeight*1.5f, DarkColor, "Save state");
-                vskewer.Advance(10.f);
-    
-                BoxGui::Frame savestateFrame{mainFrame,
-                    vskewer.Spit({mainFrame.Area.Size.X, TextLineHeight * 4.f}, Gfx::align_Right),
-                    {0.f, 0.f}, {0.f, 0.f},
-                    BoxGui::direction_Horizontal, BoxGui::MakeUniqueName("savestates", 42),
-                    false, false};
-                Gfx::PushScissor(savestateFrame.Area.Position.X, savestateFrame.Area.Position.Y, savestateFrame.Area.Size.X, savestateFrame.Area.Size.Y);
-                BoxGui::Skewer savestateSkewer{savestateFrame, 0.f, BoxGui::direction_Horizontal};
-                savestateSkewer.AlignLeft(20.f);
-    
-                int savestateSelected = -1;
-                for (u32 i = 0; i < 8; i++)
-                {
-                    BoxGui::Frame savebutton{savestateFrame, savestateSkewer.Spit({TextLineHeight*4.f, TextLineHeight*4.f}, Gfx::align_Right), {5.f, 5.f}, {5.f, 5.f}};
-                    Gfx::Color fontColor = SeparatorColor;
-                    if (Config::ConsoleType != 1)
-                    {
-                        if (BoxGui::InputElement(savebutton, BoxGui::MakeUniqueName("savestate", i)))
-                        {
-                            savestateSelected = i;
-                            Gfx::DrawRectangle(savebutton.Area.Position, savebutton.Area.Size, WidgetColorVibrant, false);
-                        }
-                        fontColor = DarkColor;
-                    }
-                    char label[2] = {'1', '\0'};
-                    label[0] += i;
-                    Gfx::DrawText(Gfx::SystemFontStandard,
-                        savebutton.Area.Position+savebutton.Area.Size*0.5f, TextLineHeight*1.5f,
-                        fontColor,
-                        Gfx::align_Center, Gfx::align_Center,
-                        label);
-                
-                    if (i > 0)
-                    {
-                        Gfx::DrawRectangle(savebutton.Area.Position - Gfx::Vector2f{5.f, 0.f}, {2.f, savebutton.Area.Size.Y-2.f*2.f}, SeparatorColor);
-                    }
-                }
-                Gfx::PopScissor();
-                if (savestateSelected != -1)
-                {
-                    KeyExplanation::Explain(KeyExplanation::button_A, "Save state");
-                    if (BoxGui::ConfirmPressed())
-                    {
-                        char filename[512];
-                        Frontend::GetSavestateName(savestateSelected + 1, filename, 512);
-                        if (Frontend::SaveState(filename))
-                            SavestateMask |= 1<<savestateSelected;
-                        else
-                            ErrorDialog::Open("Failed to create savestate");
-                    }
-                }
-                vskewer.Advance(15.f);
-    
-                BoxGui::Frame loadTitleFrame{mainFrame, vskewer.Spit({0.f, TextLineHeight * 2.f}, Gfx::align_Right), {15.f, 0.f}};
-                Gfx::DrawText(Gfx::SystemFontStandard, loadTitleFrame.Area.Position, TextLineHeight*1.5f, DarkColor, "Load state");
-                vskewer.Advance(10.f);
-    
-                BoxGui::Frame loadstateFrame{mainFrame,
-                    vskewer.Spit({mainFrame.Area.Size.X, TextLineHeight * 4.f}, Gfx::align_Right),
-                    {0.f, 0.f}, {0.f, 0.f},
-                    BoxGui::direction_Horizontal,
-                    BoxGui::MakeUniqueName("savestates", 42),
-                    false, false};
-                Gfx::PushScissor(loadstateFrame.Area.Position.X, loadstateFrame.Area.Position.Y, loadstateFrame.Area.Size.X, loadstateFrame.Area.Size.Y);
-                BoxGui::Skewer loadstateSkewer{loadstateFrame, 0.f, BoxGui::direction_Horizontal};
-                loadstateSkewer.AlignLeft(20.f);
-    
-                int loadstateSelected = -1;
-                for (u32 i = 0; i < 9; i++)
-                {
-                    BoxGui::Frame loadbutton{loadstateFrame, loadstateSkewer.Spit({TextLineHeight*4.f, TextLineHeight*4.f}, Gfx::align_Right), {5.f, 5.f}, {5.f, 5.f}};
-    
-                    Gfx::Color fontColor = SeparatorColor;
-                    bool enabled = i < 8
-                        ? SavestateMask & (1<<i)
-                        : Frontend::SavestateLoaded;
-                    if (enabled && Config::ConsoleType != 1)
-                    {
-                        if (BoxGui::InputElement(loadbutton, BoxGui::MakeUniqueName("loadstate", i)))
-                        {
-                            loadstateSelected = i;
-                            Gfx::DrawRectangle(loadbutton.Area.Position, loadbutton.Area.Size, WidgetColorVibrant, false);
-                        }
-                        fontColor = DarkColor;
-                    }
-                    if (i == 8)
-                    {
-                        Gfx::DrawText(Gfx::SystemFontStandard,
-                            loadbutton.Area.Position+loadbutton.Area.Size*0.5f, TextLineHeight,
-                            fontColor,
-                            Gfx::align_Center, Gfx::align_Center,
-                            "Undo\nload");
-                    }
-                    else
-                    {
-                        char label[2] = {'1', '\0'};
-                        label[0] += i;
-                        Gfx::DrawText(Gfx::SystemFontStandard,
-                            loadbutton.Area.Position+loadbutton.Area.Size*0.5f, TextLineHeight*1.5f,
-                            fontColor,
-                            Gfx::align_Center, Gfx::align_Center,
-                            label);
-                    }
-    
-                    if (i > 0)
-                    {
-                        Gfx::DrawRectangle(loadbutton.Area.Position - Gfx::Vector2f{5.f, 0.f}, {2.f, loadbutton.Area.Size.Y-2.f*2.f}, SeparatorColor);
-                    }
-                }
-                Gfx::PopScissor();
-    
-                if (loadstateSelected != -1)
-                {
-                    KeyExplanation::Explain(KeyExplanation::button_A, "Load state");
-                    if (BoxGui::ConfirmPressed())
-                    {
-                        bool loadedSuccessfully;
-                        if (loadstateSelected < 8)
-                        {
-                            char filename[512];
-                            Frontend::GetSavestateName(loadstateSelected + 1, filename, 512);
-                            loadedSuccessfully = Frontend::LoadState(filename);
-                        }
-                        else
-                        {
-                            Frontend::UndoStateLoad();
-                            loadedSuccessfully = true;
-                        }
-    
-                        if (loadedSuccessfully)
-                        {
-                            Emulation::SetPause(false);
-                            BoxGui::ForceSelecton(BoxGui::MakeUniqueName("sidebar", 0));
-                        }
-                        else
-                        {
-                            ErrorDialog::Open("Couldn't load savefile");
-                        }
-                    }
-                }
-            }
+            if (NavEntry(sidebar, bottom, "Exit", nav_Exit))
+                Done = true;
         }
+        bottom.Advance(12.f);
+        TVCard(sidebar, bottom);
+    }
+
+    // ---- main area
+    {
+        BoxGui::Frame mainFrame{parent, {{SidebarWidth, 0.f}, {parent.Area.Size.X - SidebarWidth, parent.Area.Size.Y}},
+            {UIPagePadding, UIPagePadding}, {UIPagePadding, 0.f}};
+        if (paused)
+            DoPause(mainFrame);
+        else
+            DoHome(mainFrame);
     }
 }
 

@@ -1,7 +1,7 @@
 #include "RATracker.h"
 #include "RetroAchievements.h"
 #include "Gfx.h"
-#include "Style.h" // Per WidgetColorBright, DarkColor, ecc.
+#include "Style.h" // Per CardColor, TextColor, ecc.
 #include "PlatformConfig.h" // Per Config::GlobalRotation
 #include <unordered_map>
 #include <cmath>
@@ -80,9 +80,9 @@ void LeaderboardTracker::Render() {
     }
 
     // Disegna il rettangolo di sfondo
-    Gfx::DrawRectangle(boxPos, boxSize, WidgetColorBright, true);
+    Gfx::DrawRectangle(boxPos, boxSize, CardColor, true);
 
     // Disegna il testo
-    Gfx::DrawText(Gfx::SystemFontStandard, boxPos + Gfx::Vector2f{padding, padding}, TextLineHeight, DarkColor,
+    Gfx::DrawText(Gfx::SystemFontStandard, boxPos + Gfx::Vector2f{padding, padding}, TextLineHeight, TextColor,
                   Gfx::align_Left, Gfx::align_Center, value.c_str());
 }

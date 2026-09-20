@@ -1,4 +1,5 @@
 #include "KeyExplanations.h"
+
 #include "Style.h"
 
 #include <string>
@@ -36,18 +37,19 @@ void DoGui(BoxGui::Frame& parent)
     if (KeysExplained == 0)
         return;
 
-    const Gfx::Vector2f Padding = {15.f, 10.f};
+    const float pillHeight = 36.f;
+    const float margin = 24.f;
+    const float gap = 10.f;
 
-    u32 i = 0;
     u32 keysExplained = KeysExplained;
-    BoxGui::Skewer skewer{parent, parent.Area.Size.Y - TextLineHeight / 2.f - Padding.Y, BoxGui::direction_Horizontal};
-    skewer.AlignRight(0.f);
+    BoxGui::Skewer skewer{parent, parent.Area.Size.Y - margin - pillHeight / 2.f, BoxGui::direction_Horizontal};
+    skewer.AlignRight(margin);
     while (keysExplained)
     {
         int button = 31 - __builtin_clz(keysExplained);
         keysExplained &= ~(1 << button);
 
-        const char* buttonIcon = "\uE009";
+        const char* buttonIcon = "";
         switch (button)
         {
         case button_A: buttonIcon = GFX_NINTENDOFONT_A_BUTTON; break;
@@ -60,14 +62,17 @@ void DoGui(BoxGui::Frame& parent)
         }
 
         const char* explanation = KeyExplanations[button].c_str();
-        Gfx::Vector2f textSize = Gfx::MeasureText(Gfx::SystemFontStandard, TextLineHeight, explanation) + Gfx::Vector2f{28.f, 0.f};
-        BoxGui::Frame frame{parent, skewer.Spit(textSize + Padding * 2.f), Padding, Padding};
+        Gfx::Vector2f textSize = Gfx::MeasureText(Gfx::SystemFontStandard, TextLineHeight * 0.85f, explanation);
+        float pillWidth = 14.f + TextLineHeight + 8.f + textSize.X + 16.f;
 
-        Gfx::DrawRectangle(frame.UnpaddedArea().Position, frame.UnpaddedArea().Size, DarkColor, true);
-        Gfx::DrawText(Gfx::SystemFontNintendoExt, frame.Area.Position, TextLineHeight, WidgetColorBright, Gfx::align_Left, Gfx::align_Left, buttonIcon);
-        Gfx::DrawText(Gfx::SystemFontStandard, frame.Area.Position + Gfx::Vector2f{28.f, 0.f}, TextLineHeight, WidgetColorBright, Gfx::align_Left, Gfx::align_Left, explanation);
-
-        i++;
+        BoxGui::Frame frame{parent, skewer.Spit({pillWidth, pillHeight})};
+        Gfx::DrawRoundedRect(frame.Area.Position, frame.Area.Size, RaisedColor, pillHeight / 2.f);
+        Gfx::Vector2f textPos = frame.Area.Position + Gfx::Vector2f{14.f, pillHeight / 2.f};
+        Gfx::DrawText(Gfx::SystemFontNintendoExt, textPos, TextLineHeight, TextColor,
+            Gfx::align_Left, Gfx::align_Center, buttonIcon);
+        Gfx::DrawText(Gfx::SystemFontStandard, textPos + Gfx::Vector2f{TextLineHeight + 8.f, 0.f}, TextLineHeight * 0.85f, TextSoftColor,
+            Gfx::align_Left, Gfx::align_Center, explanation);
+        skewer.Advance(gap);
     }
 }
 

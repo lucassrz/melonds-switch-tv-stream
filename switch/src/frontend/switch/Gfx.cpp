@@ -36,6 +36,8 @@ struct Vertex
     float UV[2];
     u8 Color[4];
     float CoolTransparency[2];
+    float Local[2];   // offset from the quad center, for rounded corners
+    float Shape[4];   // half width, half height, corner radius, border thickness
 };
 
 struct Transformation
@@ -762,6 +764,8 @@ void EndFrame(Color clearColor, int rotation)
         DkVtxAttribState{0, 0, offsetof(Vertex, UV), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
         DkVtxAttribState{0, 0, offsetof(Vertex, Color), DkVtxAttribSize_4x8, DkVtxAttribType_Unorm, 0},
         DkVtxAttribState{0, 0, offsetof(Vertex, CoolTransparency), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
+        DkVtxAttribState{0, 0, offsetof(Vertex, Local), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
+        DkVtxAttribState{0, 0, offsetof(Vertex, Shape), DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0},
     });
     PresentCmdBuf.bindVtxBufferState({{sizeof(Vertex), 0}});
     PresentCmdBuf.bindIdxBuffer(DkIdxFormat_Uint16, DataHeap->GpuAddr(IndexData[SwapchainSlot]));
@@ -928,7 +932,8 @@ void DrawRectangle(u32 texIdx,
     Vector2f position, Vector2f size,
     Vector2f subPosition, Vector2f subSize,
     Color tint,
-    bool coolTransparency)
+    bool coolTransparency,
+    float radius, float border)
 {
     Texture& texture = Textures[texIdx];
 
@@ -945,24 +950,31 @@ void DrawRectangle(u32 texIdx,
     float coolTransparencyMax = coolTransparency ? 0.9f : 1.f;
 
     Vector2f outerBounds = position + size;
+    Vector2f half = size * 0.5f;
+    radius = std::min(radius, std::min(half.X, half.Y));
+    float shape[4] = {half.X, half.Y, radius, border};
 
     assert(CurClientVertex + 4 <= MaxVertices);
     VertexDataClient[CurClientVertex + 0] = {position.X, position.Y,
         uvMin.X, uvMin.Y,
         tintR8, tintG8, tintB8, tintA8,
-        coolTransparencyMin, coolTransparencyMax};
+        coolTransparencyMin, coolTransparencyMax,
+        -half.X, -half.Y, shape[0], shape[1], shape[2], shape[3]};
     VertexDataClient[CurClientVertex + 1] = {outerBounds.X, position.Y,
         uvMax.X, uvMin.Y, tintR8,
         tintG8, tintB8, tintA8,
-        coolTransparencyMin, coolTransparencyMax};
+        coolTransparencyMin, coolTransparencyMax,
+        half.X, -half.Y, shape[0], shape[1], shape[2], shape[3]};
     VertexDataClient[CurClientVertex + 2] = {position.X, outerBounds.Y,
         uvMin.X, uvMax.Y,
         tintR8, tintG8, tintB8, tintA8,
-        coolTransparencyMin, coolTransparencyMax};
+        coolTransparencyMin, coolTransparencyMax,
+        -half.X, half.Y, shape[0], shape[1], shape[2], shape[3]};
     VertexDataClient[CurClientVertex + 3] = {outerBounds.X, outerBounds.Y,
         uvMax.X, uvMax.Y,
         tintR8, tintG8, tintB8, tintA8,
-        coolTransparencyMin, coolTransparencyMax};
+        coolTransparencyMin, coolTransparencyMax,
+        half.X, half.Y, shape[0], shape[1], shape[2], shape[3]};
 
     assert(CurClientIndex + 6 <= MaxIndices);
     IndexDataClient[CurClientIndex + 0] = CurClientVertex;
@@ -978,14 +990,14 @@ void DrawRectangle(u32 texIdx,
     CurClientIndex += 6;
 }
 
-void DrawRectangle(Vector2f position, Vector2f size, Color tint, bool coolTransparency)
+void DrawRectangle(Vector2f position, Vector2f size, Color tint, bool coolTransparency, float radius, float border)
 {
-    DrawRectangle(WhiteTexture, position, size, Vector2f{}, Vector2f{}, tint, coolTransparency);
+    DrawRectangle(WhiteTexture, position, size, Vector2f{}, Vector2f{}, tint, coolTransparency, radius, border);
 }
 
-void DrawRectangle(u32 texIdx, Vector2f position, Vector2f size, Vector2f subPosition, Color tint, bool coolTransparency)
+void DrawRectangle(u32 texIdx, Vector2f position, Vector2f size, Vector2f subPosition, Color tint, bool coolTransparency, float radius, float border)
 {
-    DrawRectangle(texIdx, position, size, subPosition, subPosition + size, tint, coolTransparency);
+    DrawRectangle(texIdx, position, size, subPosition, subPosition + size, tint, coolTransparency, radius, border);
 }
 
 void DrawRectangle(u32 texIdx,
@@ -999,10 +1011,10 @@ void DrawRectangle(u32 texIdx,
     Vector2f uvMax = uvMin + subSize * rcpTexSize;
 
     assert(CurClientVertex + 4 <= MaxVertices);
-    VertexDataClient[CurClientVertex + 0] = {p0.X, p0.Y, uvMin.X, uvMin.Y, 255, 255, 255, 255, 1.f, 1.f};
-    VertexDataClient[CurClientVertex + 1] = {p1.X, p1.Y, uvMax.X, uvMin.Y, 255, 255, 255, 255, 1.f, 1.f};
-    VertexDataClient[CurClientVertex + 2] = {p2.X, p2.Y, uvMin.X, uvMax.Y, 255, 255, 255, 255, 1.f, 1.f};
-    VertexDataClient[CurClientVertex + 3] = {p3.X, p3.Y, uvMax.X, uvMax.Y, 255, 255, 255, 255, 1.f, 1.f};
+    VertexDataClient[CurClientVertex + 0] = {p0.X, p0.Y, uvMin.X, uvMin.Y, 255, 255, 255, 255, 1.f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+    VertexDataClient[CurClientVertex + 1] = {p1.X, p1.Y, uvMax.X, uvMin.Y, 255, 255, 255, 255, 1.f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+    VertexDataClient[CurClientVertex + 2] = {p2.X, p2.Y, uvMin.X, uvMax.Y, 255, 255, 255, 255, 1.f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+    VertexDataClient[CurClientVertex + 3] = {p3.X, p3.Y, uvMax.X, uvMax.Y, 255, 255, 255, 255, 1.f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
 
     assert(CurClientIndex + 6 <= MaxIndices);
     IndexDataClient[CurClientIndex + 0] = CurClientVertex;

@@ -193,17 +193,33 @@ void PopScissor();
 void WaitForFenceReady(dk::Fence& fence);
 void SignalFence(dk::Fence& fence);
 
-void DrawRectangle(Vector2f position, Vector2f size, Color tint, bool coolTransparency = false);
+// radius rounds the corners, border > 0 draws only an outline of that thickness
+void DrawRectangle(Vector2f position, Vector2f size, Color tint, bool coolTransparency = false,
+    float radius = 0.f, float border = 0.f);
 void DrawRectangle(u32 texIdx,
     Vector2f position, Vector2f size,
     Vector2f subPosition,
     Color tint,
-    bool coolTransparency = false);
+    bool coolTransparency = false,
+    float radius = 0.f, float border = 0.f);
 void DrawRectangle(u32 texIdx,
     Vector2f position, Vector2f size,
     Vector2f subPosition, Vector2f subSize,
     Color tint,
-    bool coolTransparency = false);
+    bool coolTransparency = false,
+    float radius = 0.f, float border = 0.f);
+inline void DrawRoundedRect(Vector2f position, Vector2f size, Color tint, float radius)
+{
+    DrawRectangle(position, size, tint, false, radius, 0.f);
+}
+inline void DrawRoundedOutline(Vector2f position, Vector2f size, Color tint, float radius, float thickness)
+{
+    DrawRectangle(position, size, tint, false, radius, thickness);
+}
+inline void DrawCircle(Vector2f center, float radius, Color tint)
+{
+    DrawRectangle(center - Vector2f{radius, radius}, {radius * 2.f, radius * 2.f}, tint, false, radius, 0.f);
+}
 void DrawRectangle(u32 texIdx,
     Vector2f p0, Vector2f p1, Vector2f p2, Vector2f p3,
     Vector2f subPosition, Vector2f subSize);
